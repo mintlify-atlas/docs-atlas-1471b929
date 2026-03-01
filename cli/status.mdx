@@ -1,0 +1,170 @@
+---
+title: "lerim status"
+description: "Show runtime status - platforms, memory count, queue, and last runs"
+---
+
+## Overview
+
+Print a summary of the current Lerim runtime state: connected platforms, memory count, session queue stats, and timestamps of the latest sync/maintain runs.
+
+<Note>
+  This command requires a running Lerim server. Start it with `lerim up` (Docker) or `lerim serve` (direct).
+</Note>
+
+## Syntax
+
+```bash
+lerim status [--json]
+```
+
+## Parameters
+
+<ParamField path="--json" type="boolean" default="false">
+  Output structured JSON instead of human-readable text.
+</ParamField>
+
+## Examples
+
+### Basic status
+
+Get a human-readable status summary:
+
+```bash
+lerim status
+```
+
+**Output:**
+```
+Lerim status:
+- connected_agents: 3
+- memory_count: 127
+- sessions_indexed_count: 89
+- queue: {"pending": 5, "processing": 0, "completed": 84}
+```
+
+### JSON output
+
+Get structured status for scripting:
+
+```bash
+lerim status --json
+```
+
+**Output:**
+```json
+{
+  "connected_agents": [
+    {
+      "name": "claude",
+      "path": "/home/user/.claude/projects",
+      "session_count": 42,
+      "exists": true
+    },
+    {
+      "name": "cursor",
+      "path": "/home/user/Library/Application Support/Cursor/User/globalStorage",
+      "session_count": 28,
+      "exists": true
+    },
+    {
+      "name": "opencode",
+      "path": "/home/user/.local/share/opencode",
+      "session_count": 19,
+      "exists": true
+    }
+  ],
+  "memory_count": 127,
+  "sessions_indexed_count": 89,
+  "queue": {
+    "pending": 5,
+    "processing": 0,
+    "completed": 84,
+    "failed": 0
+  },
+  "last_sync": "2026-03-01T18:30:00Z",
+  "last_maintain": "2026-03-01T12:00:00Z"
+}
+```
+
+## Status fields
+
+### connected_agents
+
+List of connected agent platforms with their session counts:
+- `name` - Platform identifier (claude, cursor, opencode, codex)
+- `path` - Filesystem path to session store
+- `session_count` - Number of sessions discovered
+- `exists` - Whether the path exists on disk
+
+### memory_count
+
+Total number of memory items (decisions + learnings) in the store.
+
+### sessions_indexed_count
+
+Number of sessions that have been indexed and processed.
+
+### queue
+
+Extraction queue statistics:
+- `pending` - Sessions queued for extraction
+- `processing` - Sessions currently being extracted
+- `completed` - Sessions successfully extracted
+- `failed` - Sessions that failed extraction
+
+### last_sync / last_maintain
+
+Timestamps of the most recent sync and maintain runs (ISO-8601 format).
+
+## How it works
+
+1. The command sends an HTTP GET request to `/api/status` on the running Lerim server
+2. The server aggregates runtime state from:
+   - Connected platforms registry (`~/.lerim/platforms.toml`)
+   - Memory directory (`<repo>/.lerim/memory/`)
+   - Sessions database (`~/.lerim/index/sessions.db`)
+   - Queue state and run history
+3. The response is formatted and displayed
+
+## Use cases
+
+### Check if Lerim is running
+
+```bash
+lerim status > /dev/null && echo "Running" || echo "Not running"
+```
+
+### Monitor queue depth
+
+```bash
+lerim status --json | jq '.queue.pending'
+```
+
+### Verify agent connections
+
+```bash
+lerim status --json | jq '.connected_agents[] | select(.exists == false)'
+```
+
+## Exit codes
+
+- **0**: Success - server is running and status returned
+- **1**: Error - server not running or unreachable
+- **2**: Usage error - invalid arguments
+
+## Related commands
+
+<CardGroup cols={2}>
+  <Card title="lerim sync" icon="arrows-rotate" href="/cli/sync">
+    Run sync to process pending sessions
+  </Card>
+  <Card title="lerim dashboard" icon="chart-line" href="/cli/dashboard">
+    View detailed metrics in web UI
+  </Card>
+</CardGroup>
+
+## Notes
+
+- If the server is not running, you'll see: `Lerim is not running. Start with: lerim up (Docker) or lerim serve (direct)`
+- The status endpoint is lightweight and safe to poll frequently
+- Use `--json` for monitoring scripts and automation

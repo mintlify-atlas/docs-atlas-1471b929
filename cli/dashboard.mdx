@@ -1,0 +1,97 @@
+---
+title: "lerim dashboard"
+description: "Show dashboard URL"
+---
+
+## Overview
+
+Print the dashboard URL. The dashboard is served by `lerim serve` (or `lerim up` for Docker). No separate server is started by this command.
+
+## Syntax
+
+```bash
+lerim dashboard [--port N]
+```
+
+## Parameters
+
+<ParamField path="--port" type="integer" default="8765">
+  Bind port for the dashboard server. Uses the port from config if not specified.
+</ParamField>
+
+## Examples
+
+### Show default dashboard URL
+
+```bash
+lerim dashboard
+```
+
+**Output:**
+```
+Dashboard: http://localhost:8765
+The dashboard is served by `lerim serve` (or `lerim up` for Docker).
+```
+
+### Specify custom port
+
+```bash
+lerim dashboard --port 9000
+```
+
+**Output:**
+```
+Dashboard: http://localhost:9000
+The dashboard is served by `lerim serve` (or `lerim up` for Docker).
+```
+
+## Dashboard features
+
+The dashboard provides a local UI for:
+
+- **Overview**: High-level metrics and charts (sessions, messages, tools, errors, tokens, activity by day/hour, model usage)
+- **Runs**: Searchable session list (50/page) with status and metadata; open any run in a full-screen chat viewer
+- **Memories**: Library + editor for memory records (filter, inspect, edit title/body/kind/confidence/tags)
+- **Pipeline**: Sync/maintain status, extraction queue state, and latest extraction report
+- **Settings**: Dashboard-editable config for server, model roles, and tracing; saves to `~/.lerim/config.toml`
+
+<Tip>
+  Top bar filters (`Agent`, `Scope`) update dashboard metrics and run listings in real-time.
+</Tip>
+
+## How to access
+
+1. Start the Lerim server:
+   ```bash
+   lerim up          # Docker mode
+   # or
+   lerim serve       # Direct mode
+   ```
+
+2. Get the dashboard URL:
+   ```bash
+   lerim dashboard
+   ```
+
+3. Open the URL in your browser
+
+## Exit codes
+
+- **0**: Success - URL printed
+
+## Related commands
+
+<CardGroup cols={2}>
+  <Card title="lerim serve" icon="server" href="/cli/serve">
+    Start the dashboard server
+  </Card>
+  <Card title="lerim status" icon="chart-simple" href="/cli/status">
+    Check runtime status
+  </Card>
+</CardGroup>
+
+## Notes
+
+- This command only prints the URL; it does not start a server
+- The actual dashboard is served by `lerim serve` or runs inside the Docker container with `lerim up`
+- The port defaults to `8765` but can be configured in `~/.lerim/config.toml`

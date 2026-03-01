@@ -1,0 +1,326 @@
+---
+title: Docker workflow
+description: Run Lerim as an always-on Docker service with persistent memory
+---
+
+The recommended way to run Lerim is as a Docker container. This gives you an always-on service that syncs agent sessions, extracts memories, and serves the dashboard without manual intervention.
+
+## Prerequisites
+
+You'll need:
+
+- Docker installed ([get Docker](https://docs.docker.com/get-docker/))
+- Python 3.10+ for the CLI client
+- Lerim installed: `pip install lerim`
+
+## Starting Lerim
+
+Once you've run `lerim init` and added projects, start the Docker service:
+
+```bash
+lerim up
+```
+
+This command:
+
+1. Reads `~/.lerim/config.toml` for your agent and project configurations
+2. Generates a `docker-compose.yml` file in `~/.lerim/`
+3. Pulls the pre-built image from GitHub Container Registry (GHCR)
+4. Starts a container with volume mounts for:
+   - Agent session stores (`~/.claude/`, `~/.codex/`, etc.)
+   - Project directories (for `.lerim/` memory folders)
+   - Global Lerim data (`~/.lerim/`)
+
+<Note>
+The container runs `lerim serve`, which combines the HTTP API, dashboard, and daemon loop in a single process.
+</Note>
+
+### First-time output
+
+```bash
+$ lerim up
+Starting Lerim with 2 projects and 3 agents...
+Lerim is running at http://localhost:8765
+```
+
+The dashboard is now accessible at **http://localhost:8765**.
+
+## Stopping Lerim
+
+Stop the Docker container:
+
+```bash
+lerim down
+```
+
+Output:
+
+```
+Lerim stopped.
+```
+
+<Warning>
+Stopping Lerim halts memory extraction. New agent sessions won't be processed until you restart.
+</Warning>
+
+## Viewing logs
+
+Tail the container logs to see sync activity, extraction results, and errors:
+
+```bash
+lerim logs
+```
+
+For continuous log streaming (like `tail -f`):
+
+```bash
+lerim logs --follow
+```
+
+Press `Ctrl+C` to stop following.
+
+### Log output example
+
+```
+lerim-1  | Lerim serve running at http://0.0.0.0:8765/
+lerim-1  | Sync: 3 sessions enqueued, 2 extracted
+lerim-1  | Maintain: merged 1 duplicate, archived 0 stale
+```
+
+## Container lifecycle
+
+### Updating configuration
+
+When you add or remove projects, Lerim automatically recreates the container to update volume mounts:
+
+<Steps>
+  <Step title="Add a new project">
+    ```bash
+    lerim project add ~/work/new-repo
+    ```
+  </Step>
+
+  <Step title="Container restarts automatically">
+    ```
+    Added project "new-repo" (/Users/you/work/new-repo)
+    Created /Users/you/work/new-repo/.lerim/
+    Restarting Lerim to mount new project...
+    Done.
+    ```
+  </Step>
+</Steps>
+
+The same happens when removing projects:
+
+```bash
+lerim project remove old-repo
+# Removed project "old-repo"
+# Restarting Lerim...
+# Done.
+```
+
+### Manual restart
+
+If you need to restart Lerim manually (e.g., after editing config files):
+
+```bash
+lerim down
+lerim up
+```
+
+<Tip>
+Running `lerim up` when the container is already running recreates it with the latest config.
+</Tip>
+
+## Volume mounts
+
+Lerim mounts these directories into the container:
+
+| Host path | Container path | Purpose |
+|-----------|---------------|----------|
+| `~/.lerim/` | `/root/.lerim/` | Global config and data |
+| `~/.claude/` | `/root/.claude/` | Claude Code sessions |
+| `~/.codex/` | `/root/.codex/` | Codex CLI sessions |
+| `~/Library/Application Support/Cursor/` | `/root/.cursor/` | Cursor sessions |
+| `~/.local/share/opencode/` | `/root/.opencode/` | OpenCode sessions |
+| Project directories | `/projects/<name>/` | Repo-specific `.lerim/` folders |
+
+<Note>
+Paths vary by platform (macOS, Linux, Windows). Lerim automatically detects the correct paths for your system.
+</Note>
+
+## Building locally
+
+By default, `lerim up` pulls the pre-built image from GHCR. For development or custom builds, use the `--build` flag:
+
+```bash
+lerim up --build
+```
+
+This builds the image from your local `Dockerfile` instead of pulling from the registry.
+
+### Dockerfile reference
+
+The official Lerim Dockerfile:
+
+```dockerfile
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.source=https://github.com/lerim-dev/lerim-cli
+
+# Install curl (for healthcheck) and ripgrep
+RUN apt-get update && apt-get install -y --no-install-recommends curl ripgrep && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install lerim from local source
+COPY . /build
+RUN pip install --no-cache-dir /build && rm -rf /build
+
+EXPOSE 8765
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8765/api/health || exit 1
+
+ENTRYPOINT ["lerim", "serve"]
+```
+
+## Healthcheck
+
+The container includes a healthcheck that pings `/api/health` every 30 seconds. Check container health:
+
+```bash
+docker ps
+```
+
+Look for the **STATUS** column:
+
+```
+CONTAINER ID   IMAGE                      STATUS
+abc123def456   ghcr.io/lerim-dev/lerim-cli   Up 2 minutes (healthy)
+```
+
+If status shows **unhealthy**, check logs:
+
+```bash
+lerim logs --follow
+```
+
+## Using the dashboard
+
+With Docker running, the dashboard is served at:
+
+```
+http://localhost:8765
+```
+
+To confirm it's accessible:
+
+```bash
+lerim dashboard
+# Dashboard: http://localhost:8765
+# The dashboard is served by `lerim serve` (or `lerim up` for Docker).
+```
+
+See the [Dashboard guide](/guides/dashboard) for details on using the web interface.
+
+## Querying from CLI
+
+With the Docker service running, these commands connect to the HTTP API:
+
+<CodeGroup>
+```bash Ask questions
+lerim ask "What auth pattern do we use?"
+```
+
+```bash Manual sync
+lerim sync
+```
+
+```bash Check status
+lerim status
+```
+
+```bash Manual maintenance
+lerim maintain
+```
+</CodeGroup>
+
+All service commands require the Docker container to be running (or `lerim serve` if running natively).
+
+## Troubleshooting
+
+<Accordion title="Port 8765 already in use">
+  Another service is using port 8765.
+
+  **Solution:** Stop the conflicting service or change Lerim's port in `~/.lerim/config.toml`:
+  ```toml
+  [server]
+  port = 9000
+  ```
+  Then restart:
+  ```bash
+  lerim down
+  lerim up
+  ```
+</Accordion>
+
+<Accordion title="Container exits immediately">
+  Check logs for errors:
+  ```bash
+  lerim logs
+  ```
+
+  Common causes:
+  - Missing API keys (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or `ZAI_API_KEY`)
+  - Invalid config in `~/.lerim/config.toml`
+  - Permission issues with mounted volumes
+</Accordion>
+
+<Accordion title="Memories not updating">
+  Verify the daemon is running:
+  ```bash
+  lerim status
+  ```
+
+  Force a sync:
+  ```bash
+  lerim sync --force
+  ```
+
+  Check logs for extraction errors:
+  ```bash
+  lerim logs --follow
+  ```
+</Accordion>
+
+<Accordion title="Docker not found">
+  Install Docker from [docs.docker.com/get-docker](https://docs.docker.com/get-docker/).
+
+  Alternatively, run Lerim natively without Docker. See the [Native workflow guide](/guides/native-workflow).
+</Accordion>
+
+## Daemon behavior
+
+Inside the Docker container, `lerim serve` runs a background daemon loop with independent intervals:
+
+- **Sync interval**: Every 10 minutes (default) — indexes new sessions and extracts memories
+- **Maintain interval**: Every 60 minutes (default) — merges duplicates, archives stale items
+
+These intervals are configurable in `~/.lerim/config.toml`:
+
+```toml
+[daemon]
+sync_interval_minutes = 10
+maintain_interval_minutes = 60
+```
+
+<Tip>
+The Docker workflow is fully automated. Once running, Lerim continuously processes agent sessions with no manual intervention required.
+</Tip>
+
+## Next steps
+
+- Learn about [native workflow](/guides/native-workflow) for running without Docker
+- Explore the [dashboard](/guides/dashboard) interface
+- Query memories with [lerim ask](/guides/querying-memories)

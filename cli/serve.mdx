@@ -1,0 +1,245 @@
+---
+title: "lerim serve"
+description: "Start HTTP API + dashboard + daemon loop (Docker entrypoint)"
+---
+
+## Overview
+
+Combined server: HTTP API + dashboard + background daemon loop in one process. This is the Docker container entrypoint, but can also be run directly for development without Docker.
+
+## Syntax
+
+```bash
+lerim serve [--host HOST] [--port PORT]
+```
+
+## Parameters
+
+<ParamField path="--host" type="string" default="0.0.0.0">
+  Bind address for the HTTP server. Use `0.0.0.0` to listen on all interfaces or `127.0.0.1` for localhost only.
+</ParamField>
+
+<ParamField path="--port" type="integer" default="8765">
+  Bind port for the HTTP server. Can also be configured via `server_port` in config.
+</ParamField>
+
+## Examples
+
+### Start with defaults
+
+Start the server on all interfaces, port 8765:
+
+```bash
+lerim serve
+```
+
+**Output:**
+```
+Lerim serve running at http://0.0.0.0:8765/
+```
+
+### Custom host and port
+
+Run on localhost only with a custom port:
+
+```bash
+lerim serve --host 127.0.0.1 --port 9000
+```
+
+**Output:**
+```
+Lerim serve running at http://127.0.0.1:9000/
+```
+
+## What runs
+
+When you run `lerim serve`, three components start in one process:
+
+### 1. HTTP API server
+
+Exposes endpoints for client commands:
+- `POST /api/sync` - Sync sessions and extract memories
+- `POST /api/maintain` - Run memory refinement
+- `POST /api/ask` - Answer questions using memory
+- `GET /api/status` - Get runtime status
+
+### 2. Dashboard web UI
+
+Served at the root path (`http://localhost:8765/`):
+- Overview metrics and charts
+- Session browser and viewer
+- Memory library and editor
+- Pipeline status and queue
+- Settings editor
+
+### 3. Background daemon
+
+Runs periodic sync and maintain cycles:
+- **Sync**: Every 10 minutes (default) - index new sessions and extract memories
+- **Maintain**: Every 60 minutes (default) - refine existing memories
+
+<Note>
+  Sync and maintain intervals are independent and configurable via `sync_interval_minutes` and `maintain_interval_minutes` in config.
+</Note>
+
+## Configuration
+
+The server reads from layered config (low to high priority):
+
+1. `src/lerim/config/default.toml` (package defaults)
+2. `~/.lerim/config.toml` (user global)
+3. `<repo>/.lerim/config.toml` (project overrides)
+4. `LERIM_CONFIG` env var (explicit override)
+
+Relevant config keys:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8765
+
+[daemon]
+sync_interval_minutes = 10
+maintain_interval_minutes = 60
+sync_window_days = 7
+sync_max_sessions = 50
+```
+
+## Daemon behavior
+
+The background daemon runs two independent loops:
+
+### Sync loop
+
+1. Wait `sync_interval_minutes` (default 10)
+2. Discover new sessions from connected platforms (within `sync_window_days` window)
+3. Enqueue up to `sync_max_sessions` for extraction
+4. Extract memories using DSPy
+5. Write decisions and learnings to `.lerim/memory/`
+6. Repeat
+
+### Maintain loop
+
+1. Wait `maintain_interval_minutes` (default 60)
+2. Scan existing memories
+3. Merge duplicates
+4. Archive low-value items
+5. Consolidate related memories
+6. Apply time-based decay
+7. Repeat
+
+<Tip>
+  The daemon intervals are independent - sync runs more frequently than maintain. Both use monotonic time to avoid drift.
+</Tip>
+
+## Signal handling
+
+Graceful shutdown on `SIGTERM` or `SIGINT` (Ctrl+C):
+
+```bash
+lerim serve
+# Press Ctrl+C
+```
+
+The server:
+1. Sets a stop event
+2. Waits for the current daemon cycle to complete
+3. Closes the HTTP server
+4. Exits cleanly
+
+## Use cases
+
+### Docker entrypoint
+
+The `lerim up` command generates a `docker-compose.yml` that runs `lerim serve` as the container entrypoint:
+
+```yaml
+command: lerim serve --host 0.0.0.0 --port 8765
+```
+
+### Development without Docker
+
+Run Lerim directly on your host:
+
+```bash
+lerim connect auto
+lerim serve
+```
+
+This is useful for:
+- Local development and debugging
+- Testing config changes
+- Running on systems without Docker
+
+### Custom server setup
+
+Bind to localhost only for secure access:
+
+```bash
+lerim serve --host 127.0.0.1 --port 8765
+```
+
+Then use SSH tunneling for remote access:
+
+```bash
+ssh -L 8765:localhost:8765 user@remote-host
+```
+
+## Exit codes
+
+- **0**: Success - server stopped gracefully
+- **1**: Error - startup failure (port in use, config error, etc.)
+
+## Related commands
+
+<CardGroup cols={2}>
+  <Card title="lerim up" icon="docker" href="/cli/up-down-logs">
+    Start Lerim in Docker
+  </Card>
+  <Card title="lerim daemon" icon="rotate" href="/cli/daemon">
+    Run daemon loop only (no HTTP server)
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Port already in use
+
+```
+OSError: [Errno 48] Address already in use
+```
+
+**Solution:** Change the port or stop the conflicting process:
+
+```bash
+lerim serve --port 9000
+# or
+lsof -ti:8765 | xargs kill
+```
+
+### No connected platforms
+
+If no platforms are connected, sync will find no sessions:
+
+```bash
+lerim connect auto
+lerim serve
+```
+
+### API key errors
+
+If extraction fails with auth errors, set your API keys:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+# or
+export OPENAI_API_KEY="sk-..."
+lerim serve
+```
+
+## Notes
+
+- The HTTP server uses `ThreadingHTTPServer` for concurrent request handling
+- The daemon thread is marked `daemon=True` so it won't block process exit
+- Daemon errors are logged but don't crash the server
+- The server initializes the sessions database on startup

@@ -1,0 +1,389 @@
+---
+title: lerim maintain
+description: Refine existing memories offline (cold path)
+---
+
+The `lerim maintain` command is the **cold path** for memory refinement. It runs offline maintenance over stored memories: merges duplicates, archives low-value items, consolidates related memories, and applies time-based decay to keep the memory store clean and relevant.
+
+<Note>
+This is a **service command** - it requires a running Lerim server started via `lerim up` or `lerim serve`.
+</Note>
+
+## Syntax
+
+```bash
+lerim maintain                # Run one maintenance pass
+lerim maintain --force        # Force maintenance even if recently run
+lerim maintain --dry-run      # Preview without writing
+```
+
+## What it does
+
+1. **Scans existing memories** - Reads all decision and learning markdown files from `<repo>/.lerim/memory/`
+2. **Identifies duplicates** - Finds memories with similar titles and bodies
+3. **Merges duplicates** - Combines redundant memories into a single authoritative version
+4. **Archives low-value items** - Moves outdated or low-confidence memories to `memory/archived/`
+5. **Consolidates related memories** - Merges closely related memories that should be unified
+6. **Applies time-based decay** - Reduces confidence scores for stale memories over time
+7. **Updates metadata** - Refreshes `updated` timestamps and recalculates confidence scores
+
+## Parameters
+
+<ParamField path="--force" type="boolean">
+  Force maintenance even if a recent run was completed. 
+  
+  By default, `maintain` tracks the last run time and skips execution if maintenance ran recently (within the configured interval). Use `--force` to override this and run maintenance unconditionally.
+
+  ```bash
+  lerim maintain --force
+  ```
+</ParamField>
+
+<ParamField path="--dry-run" type="boolean">
+  Preview mode: record a run but skip all actual memory changes.
+  
+  Shows what would be merged, archived, or updated without modifying any files. Useful for:
+  - Testing maintenance logic
+  - Previewing large-scale changes
+  - Verifying deduplication rules
+
+  ```bash
+  lerim maintain --dry-run
+  ```
+</ParamField>
+
+## Examples
+
+### Standard usage
+
+```bash
+# Run one maintenance pass
+lerim maintain
+```
+
+Output:
+```bash
+Maintain:
+- memories_scanned: 45
+- duplicates_merged: 3
+- memories_archived: 2
+- confidence_updated: 8
+- duration_seconds: 18.7
+```
+
+### Force maintenance
+
+```bash
+# Run even if recently executed
+lerim maintain --force
+```
+
+### Preview mode
+
+```bash
+# See what would change without writing
+lerim maintain --dry-run
+```
+
+Output:
+```bash
+Maintain:
+- memories_scanned: 45
+- duplicates_merged: 3 (dry-run, not written)
+- memories_archived: 2 (dry-run, not written)
+- confidence_updated: 8 (dry-run, not written)
+- duration_seconds: 12.4
+```
+
+### JSON output
+
+```bash
+lerim maintain --json
+```
+
+Output:
+```json
+{
+  "memories_scanned": 45,
+  "duplicates_merged": 3,
+  "memories_archived": 2,
+  "confidence_updated": 8,
+  "related_consolidated": 1,
+  "duration_seconds": 18.7,
+  "timestamp": "2026-03-01T10:30:00Z"
+}
+```
+
+## Maintenance operations
+
+### Duplicate merging
+
+Finds memories with similar content and merges them:
+
+**Before:**
+```markdown
+# memory/decisions/decision-use-postgres-20260301-abc.md
+---
+title: Use PostgreSQL for database
+confidence: 0.8
+---
+We chose PostgreSQL because...
+```
+
+```markdown
+# memory/decisions/decision-postgres-chosen-20260302-def.md
+---
+title: PostgreSQL chosen as database
+confidence: 0.7
+---
+Decided to use PostgreSQL for...
+```
+
+**After:**
+```markdown
+# memory/decisions/decision-use-postgres-20260301-abc.md
+---
+title: Use PostgreSQL for database
+confidence: 0.9
+updated: 2026-03-01T10:30:00Z
+---
+We chose PostgreSQL because... [merged content]
+```
+
+The duplicate is moved to `memory/archived/decisions/`.
+
+### Low-value archiving
+
+Memories are archived if:
+- Confidence score drops below threshold (default: 0.3)
+- Age exceeds maximum staleness (default: 180 days)
+- Marked as superseded by newer memories
+
+Archived memories go to:
+```
+<repo>/.lerim/memory/archived/
+  decisions/
+    decision-old-approach-20260101-xyz.md
+  learnings/
+    learning-outdated-pattern-20260115-abc.md
+```
+
+### Related memory consolidation
+
+Closely related memories (e.g. multiple learnings about the same topic) are merged into a single, richer memory.
+
+### Time-based decay
+
+Confidence scores decrease over time for memories that haven't been reinforced by recent sessions:
+
+- **0-30 days**: No decay
+- **30-90 days**: 10% decay
+- **90-180 days**: 25% decay
+- **180+ days**: 50% decay (may be archived)
+
+## Sync vs maintain
+
+| Command | Path | What it does | Frequency |
+|---------|------|--------------|----------|
+| `lerim sync` | **Hot path** | Index sessions, extract new memories | High (every 10 min) |
+| `lerim maintain` | **Cold path** | Refine existing memories (merge, archive, decay) | Low (every 60 min) |
+
+- **Sync** creates memories from sessions
+- **Maintain** cleans up and refines the memory store
+
+<Tip>
+Run `maintain` less frequently than `sync`. The default daemon intervals (sync every 10 min, maintain every 60 min) work well for most use cases.
+</Tip>
+
+## Automation
+
+Maintenance runs automatically when using:
+
+1. **Docker service** (`lerim up`) - Maintain runs every 60 minutes by default
+2. **Daemon loop** (`lerim daemon`) - Maintain runs at configured interval
+3. **Manual** (`lerim maintain`) - Run on-demand
+
+Configuration in `~/.lerim/config.toml`:
+
+```toml
+# Daemon intervals
+maintain_interval_minutes = 60  # Run maintain every 60 minutes
+```
+
+## Output
+
+**Human-readable:**
+
+```bash
+$ lerim maintain
+
+Maintain:
+- memories_scanned: 45
+- duplicates_merged: 3
+- memories_archived: 2
+- confidence_updated: 8
+- related_consolidated: 1
+- duration_seconds: 18.7
+```
+
+**JSON format:**
+
+```bash
+$ lerim maintain --json
+
+{
+  "memories_scanned": 45,
+  "duplicates_merged": 3,
+  "memories_archived": 2,
+  "confidence_updated": 8,
+  "related_consolidated": 1,
+  "duration_seconds": 18.7,
+  "timestamp": "2026-03-01T10:30:00Z"
+}
+```
+
+## When to run maintain
+
+### Run manually when:
+
+- After a large sync (e.g. `lerim sync --window all`)
+- When you notice duplicate memories in the dashboard
+- After changing deduplication rules in config
+- To clean up before a fresh start
+
+### Let daemon handle it when:
+
+- Using `lerim up` or `lerim daemon` (runs automatically)
+- Maintenance is working well with default intervals
+- You want hands-off memory management
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Maintenance completed successfully |
+| `1` | Server not running or runtime error |
+| `2` | Usage error (invalid arguments) |
+
+## Related commands
+
+- [`lerim sync`](/cli/sync) - Extract new memories before maintaining
+- `lerim daemon` - Run continuous sync + maintain loop
+- `lerim status` - Check last maintain timestamp
+- `lerim memory reset` - Destructive reset of all memories
+- [`lerim up`](/cli/up-down-logs) - Start server before maintaining
+
+## Troubleshooting
+
+### "Lerim is not running"
+
+Start the server first:
+
+```bash
+lerim up              # Docker
+# or
+lerim serve &         # Direct
+```
+
+### Maintain doing nothing
+
+Check if it ran recently:
+
+```bash
+lerim status          # Shows last maintain timestamp
+```
+
+Force it to run:
+
+```bash
+lerim maintain --force
+```
+
+### Too many duplicates
+
+If deduplication isn't catching duplicates:
+
+1. **Preview what would be merged:**
+   ```bash
+   lerim maintain --dry-run
+   ```
+
+2. **Adjust similarity threshold** in config:
+   ```toml
+   [maintain]
+   duplicate_threshold = 0.85  # 0.0-1.0, higher = stricter
+   ```
+
+3. **Run with force:**
+   ```bash
+   lerim maintain --force
+   ```
+
+### Aggressive archiving
+
+If too many memories are being archived:
+
+1. **Check archive threshold** in config:
+   ```toml
+   [maintain]
+   archive_confidence_threshold = 0.3  # Lower = more aggressive
+   max_age_days = 180  # Older memories are archived
+   ```
+
+2. **Restore archived memories** manually:
+   ```bash
+   # Move back from archived/
+   mv <repo>/.lerim/memory/archived/decisions/file.md \
+      <repo>/.lerim/memory/decisions/
+   ```
+
+### Not enough archiving
+
+If the memory store is cluttered:
+
+1. **Lower archive threshold:**
+   ```toml
+   [maintain]
+   archive_confidence_threshold = 0.5  # Archive more aggressively
+   ```
+
+2. **Run maintain more frequently:**
+   ```toml
+   maintain_interval_minutes = 30  # Every 30 minutes
+   ```
+
+3. **Force immediate maintenance:**
+   ```bash
+   lerim maintain --force
+   ```
+
+### Preview changes safely
+
+Before running maintenance on a large memory store:
+
+```bash
+# See what would change
+lerim maintain --dry-run
+
+# Backup first
+cp -r <repo>/.lerim/memory <repo>/.lerim/memory.backup
+
+# Run maintenance
+lerim maintain
+
+# Verify results
+lerim memory list
+```
+
+## Memory lifecycle
+
+1. **Creation** - `lerim sync` extracts memories from sessions
+2. **Reinforcement** - Repeated mentions increase confidence
+3. **Consolidation** - `lerim maintain` merges related memories
+4. **Decay** - Confidence decreases over time without reinforcement
+5. **Archiving** - Low-confidence or stale memories are archived
+6. **Deletion** - Archived memories can be manually deleted
+
+<Tip>
+Maintenance keeps your memory store high-quality by continuously refining and pruning. Let it run automatically in the background for best results.
+</Tip>

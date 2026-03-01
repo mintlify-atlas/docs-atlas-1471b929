@@ -1,0 +1,498 @@
+---
+title: Tracing setup
+description: Enable OpenTelemetry tracing to monitor Lerim's LLM usage
+---
+
+Lerim uses OpenTelemetry (OTel) tracing to give you deep visibility into LLM usage, tool calls, and performance. Traces are powered by PydanticAI's built-in instrumentation and sent to [Logfire](https://logfire.pydantic.dev), Pydantic's observability platform.
+
+## Why tracing matters
+
+Tracing helps you understand:
+
+- **LLM costs** — Token counts per role, per session, per day
+- **Performance** — Request latency, timeouts, bottlenecks
+- **Quality** — Prompt/completion pairs, tool call sequences, agent reasoning
+- **Errors** — Failures, retries, fallback triggers
+
+Without tracing, you're flying blind. With tracing, you know exactly what Lerim is doing and how much it costs.
+
+<Info>
+Lerim uses **minimal stderr logging** by design. Detailed telemetry goes through OTel spans instead of cluttering your terminal.
+</Info>
+
+## What gets traced
+
+When tracing is enabled, Lerim captures:
+
+| Event type | Details captured |
+|------------|------------------|
+| **Model calls** | Provider, model, prompt, completion, tokens (input/output), latency |
+| **Tool calls** | Tool name, arguments, results, duration |
+| **Agent iterations** | Lead agent reasoning steps, explorer subagent calls |
+| **Extraction** | DSPy pipeline execution, window processing, candidate generation |
+| **Maintain** | Merge decisions, archive operations, decay calculations |
+| **HTTP requests** | API request/response bodies (if `include_httpx = true`) |
+
+<Note>
+By default, prompt and completion text is included in traces (`include_content = true`). If you handle sensitive data, set `include_content = false` to exclude LLM inputs/outputs from traces.
+</Note>
+
+## Setting up Logfire
+
+Lerim uses Logfire as the default tracing backend. Logfire is built by Pydantic and has a generous free tier (includes 500M spans/month as of 2024).
+
+### One-time setup
+
+1. **Install Logfire:**
+
+```bash
+pip install logfire
+```
+
+Or if you installed Lerim via pip, Logfire is already included:
+
+```bash
+pip show logfire  # Check if installed
+```
+
+2. **Authenticate:**
+
+```bash
+logfire auth
+```
+
+This opens a browser to authenticate with Logfire and stores credentials locally.
+
+3. **Create a project:**
+
+```bash
+logfire projects new
+```
+
+Follow the prompts to create a Logfire project for Lerim traces.
+
+<Accordion title="What if I already have a Logfire account?">
+If you already have a Logfire account:
+
+```bash
+logfire auth           # Authenticate
+logfire projects list  # List existing projects
+```
+
+Lerim will use your default Logfire project. You can create a new project specifically for Lerim with:
+
+```bash
+logfire projects new --name lerim-traces
+```
+</Accordion>
+
+That's it! Logfire is now configured. You can enable tracing in Lerim.
+
+## Enabling tracing
+
+There are two ways to enable tracing:
+
+### Option 1: Environment variable (quick toggle)
+
+Set `LERIM_TRACING=1` before running Lerim commands:
+
+```bash
+LERIM_TRACING=1 lerim sync
+LERIM_TRACING=1 lerim maintain
+LERIM_TRACING=1 lerim ask "Why did we choose Postgres?"
+```
+
+This is great for:
+- Testing tracing without changing config files
+- One-off debugging sessions
+- CI/CD environments
+
+### Option 2: Configuration file (persistent)
+
+Enable tracing in your config file:
+
+**`~/.lerim/config.toml`** (global):
+
+```toml
+[tracing]
+enabled = true
+```
+
+Or **`<repo>/.lerim/config.toml`** (project-specific):
+
+```toml
+[tracing]
+enabled = true
+```
+
+Now all Lerim commands automatically send traces to Logfire.
+
+<Note>
+The daemon (`lerim up` or `lerim serve`) loads tracing config once at startup. If you enable tracing while the daemon is running, restart it: `lerim down && lerim up`
+</Note>
+
+## Viewing traces
+
+Open the Logfire web UI:
+
+```bash
+logfire open
+```
+
+Or visit [logfire.pydantic.dev](https://logfire.pydantic.dev) and select your project.
+
+### Understanding traces
+
+Each Lerim operation creates a trace with nested spans:
+
+```
+Sync run
+├── Index sessions (scan agent directories)
+├── Extract candidates (DSPy pipeline)
+│   ├── Model call: openai/gpt-5-nano (extraction)
+│   │   ├── Input: 45,231 tokens
+│   │   ├── Output: 1,892 tokens
+│   │   └── Duration: 3.2s
+│   └── Candidates generated: 12 decisions, 8 learnings
+├── Lead agent: Process candidates
+│   ├── Model call: x-ai/grok-4.1-fast
+│   ├── Tool call: search_memories
+│   ├── Explorer subagent: Check duplicates
+│   │   └── Model call: x-ai/grok-4.1-fast
+│   ├── Tool call: add_memory
+│   └── Decision: Added 8 new memories
+└── Sync completed: 8 added, 4 skipped
+```
+
+You can drill down into any span to see:
+- Full prompt and completion
+- Token counts (input/output)
+- Request duration
+- Tool call arguments and results
+- Error details (if any)
+
+## Tracing configuration
+
+The `[tracing]` section in config.toml controls tracing behavior:
+
+<ParamField path="enabled" type="boolean" default="false">
+  Enable OpenTelemetry tracing. Can also be enabled with `LERIM_TRACING=1`.
+</ParamField>
+
+<ParamField path="include_httpx" type="boolean" default="false">
+  Capture raw HTTP request/response bodies in traces. Useful for debugging provider API issues, but increases trace size.
+</ParamField>
+
+<ParamField path="include_content" type="boolean" default="true">
+  Include prompt and completion text in trace spans. Set to `false` if you handle sensitive data and want to exclude LLM inputs/outputs from traces.
+</ParamField>
+
+### Example configurations
+
+**Default (content included, no HTTP bodies):**
+
+```toml
+[tracing]
+enabled = true
+include_httpx = false
+include_content = true
+```
+
+**Sensitive data (exclude content):**
+
+```toml
+[tracing]
+enabled = true
+include_httpx = false
+include_content = false
+```
+
+**Full debug mode (everything):**
+
+```toml
+[tracing]
+enabled = true
+include_httpx = true
+include_content = true
+```
+
+<Warning>
+Enabling `include_httpx = true` captures raw HTTP request/response bodies, which can expose API keys and secrets in traces. Only use this for local debugging, and never commit this setting to version control.
+</Warning>
+
+## Environment variable override
+
+The `LERIM_TRACING` environment variable overrides the `[tracing].enabled` config setting:
+
+| Config | Env var | Result |
+|--------|---------|--------|
+| `enabled = false` | (not set) | Tracing OFF |
+| `enabled = false` | `LERIM_TRACING=1` | Tracing ON |
+| `enabled = true` | (not set) | Tracing ON |
+| `enabled = true` | `LERIM_TRACING=0` | Tracing ON (env var must be `1`, `true`, `yes`, or `on` to enable) |
+
+<Info>
+The env var only enables tracing — it doesn't disable it. To turn off tracing, set `enabled = false` in config or unset the env var.
+</Info>
+
+## Use cases
+
+### Debugging extraction failures
+
+If `lerim sync` fails to extract memories from sessions:
+
+1. Enable tracing:
+   ```bash
+   LERIM_TRACING=1 lerim sync
+   ```
+
+2. Open Logfire and find the failed sync run
+
+3. Look at the extraction spans:
+   - Did the model call succeed?
+   - Were candidates generated?
+   - What was the prompt?
+   - What was the output?
+
+You can now see exactly where extraction failed and why.
+
+### Monitoring token usage
+
+To understand which role uses the most tokens:
+
+1. Enable tracing in config:
+   ```toml
+   [tracing]
+   enabled = true
+   ```
+
+2. Run Lerim for a day:
+   ```bash
+   lerim up
+   ```
+
+3. Open Logfire and create a dashboard:
+   - Chart 1: Token count by model (lead, explorer, extract, summarize)
+   - Chart 2: Cost per role (if provider reports cost)
+   - Chart 3: Request count per role
+
+Now you know which role to optimize for cost.
+
+### Measuring sync performance
+
+To see how long sync takes and where time is spent:
+
+1. Enable tracing:
+   ```bash
+   LERIM_TRACING=1 lerim sync
+   ```
+
+2. Open the sync trace in Logfire
+
+3. Check span durations:
+   - Index sessions: < 1s (scanning files)
+   - Extract candidates: 3-10s (LLM calls)
+   - Lead agent: 5-20s (LLM + tool calls)
+
+If extraction is slow, consider using a faster model for `[roles.extract]`.
+
+### Investigating errors
+
+If Lerim errors out:
+
+1. Check traces in Logfire
+
+2. Find the error span (marked red)
+
+3. View error details:
+   - Exception type and message
+   - Stack trace
+   - Inputs that caused the error
+   - Retries and fallbacks
+
+Traces capture errors even if they're swallowed or retried, so you get full visibility.
+
+## Disabling tracing
+
+To turn off tracing:
+
+1. **Remove env var:**
+   ```bash
+   unset LERIM_TRACING
+   ```
+
+2. **Or set config:**
+   ```toml
+   [tracing]
+   enabled = false
+   ```
+
+3. **Restart daemon if running:**
+   ```bash
+   lerim down && lerim up
+   ```
+
+Traces will no longer be sent to Logfire.
+
+<Note>
+Disabling tracing doesn't delete existing traces from Logfire — they remain in your project history. To delete traces, use the Logfire web UI.
+</Note>
+
+## Alternative backends
+
+Lerim uses PydanticAI's OpenTelemetry instrumentation, which means you can send traces to any OTel-compatible backend:
+
+- **Logfire** (default, recommended)
+- **Datadog APM**
+- **Honeycomb**
+- **New Relic**
+- **Jaeger**
+- **Zipkin**
+
+To use a different backend, configure OTel environment variables before running Lerim:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://my-backend.example.com"
+export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=..."
+LERIM_TRACING=1 lerim sync
+```
+
+See the [OpenTelemetry documentation](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/) for all available options.
+
+<Warning>
+If you use a custom OTel backend, you're responsible for configuring the exporter. Lerim doesn't provide backend-specific setup instructions beyond Logfire.
+</Warning>
+
+## Troubleshooting
+
+### Tracing enabled but no spans in Logfire
+
+**Cause:** Logfire isn't configured or credentials are invalid.
+
+**Fix:**
+
+```bash
+logfire auth          # Re-authenticate
+logfire projects list # Verify project exists
+```
+
+### "logfire not installed" error
+
+**Cause:** Logfire package is missing.
+
+**Fix:**
+
+```bash
+pip install logfire
+```
+
+Or reinstall Lerim with tracing dependencies:
+
+```bash
+pip install 'lerim[trace]'
+```
+
+### Traces show "[REDACTED]" instead of content
+
+**Cause:** `include_content = false` in config.
+
+**Fix:** Set `include_content = true`:
+
+```toml
+[tracing]
+enabled = true
+include_content = true
+```
+
+### Tracing slows down Lerim
+
+**Cause:** Tracing adds overhead (span creation, network calls to Logfire).
+
+**Fix:**
+
+- Disable `include_httpx` (reduces trace size):
+  ```toml
+  [tracing]
+  include_httpx = false
+  ```
+
+- Or disable tracing for fast operations:
+  ```bash
+  lerim sync  # No LERIM_TRACING env var
+  ```
+
+### "API key not found" in Logfire
+
+**Cause:** Logfire credentials expired or missing.
+
+**Fix:**
+
+```bash
+logfire auth  # Re-authenticate
+```
+
+## Best practices
+
+### Enable tracing during development
+
+Keep tracing on while testing Lerim:
+
+```toml
+# ~/.lerim/config.toml
+[tracing]
+enabled = true
+include_content = true
+```
+
+This helps you catch issues early and understand model behavior.
+
+### Disable tracing in production (optional)
+
+If you're concerned about trace volume or cost:
+
+```toml
+# Production config
+[tracing]
+enabled = false
+```
+
+Or use sampling (capture 10% of traces):
+
+```bash
+export OTEL_TRACES_SAMPLER="traceidratio"
+export OTEL_TRACES_SAMPLER_ARG="0.1"
+```
+
+### Use include_content wisely
+
+If you handle sensitive data (passwords, API keys, PII):
+
+```toml
+[tracing]
+enabled = true
+include_content = false  # Exclude prompts/completions
+```
+
+You'll still see token counts, durations, and tool calls — just not the actual text.
+
+### Review traces weekly
+
+Set a recurring calendar event to review Logfire dashboards:
+
+- Token usage trends
+- Error rates
+- Slow operations
+- Cost by role
+
+This helps you optimize model selection and catch issues before they escalate.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Model roles" icon="brain" href="/configuration/model-roles">
+    Configure models for each role to optimize cost and performance
+  </Card>
+  <Card title="Config reference" icon="file-code" href="/configuration/config-toml">
+    See all tracing configuration options
+  </Card>
+</CardGroup>

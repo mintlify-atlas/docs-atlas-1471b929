@@ -1,0 +1,651 @@
+---
+title: Adding adapters
+description: Step-by-step guide for adding support for new agent platforms
+---
+
+Adding a new platform adapter is the most common contribution to Lerim. This guide walks you through creating an adapter for a new coding agent platform.
+
+## What is an adapter?
+
+Adapters are the bridge between Lerim and coding agent platforms like Claude Code, Codex, Cursor, and OpenCode. They:
+
+- Discover where session traces are stored on disk
+- Read and parse platform-specific session formats (JSONL, SQLite, etc.)
+- Convert sessions into Lerim's normalized `ViewerSession` format
+- Extract metadata like timestamps, token counts, and repository context
+
+<Info>
+All adapters follow the `Adapter` protocol defined in `src/lerim/adapters/base.py`. This ensures consistency across platforms.
+</Info>
+
+## The Adapter protocol
+
+Every adapter must implement five methods:
+
+```python src/lerim/adapters/base.py
+class Adapter(Protocol):
+    """Platform adapter protocol for discovering and loading sessions."""
+
+    def default_path(self) -> Path | None:
+        """Return the default traces directory for this platform."""
+
+    def count_sessions(self, path: Path) -> int:
+        """Return total session count under path."""
+
+    def iter_sessions(
+        self,
+        traces_dir: Path | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        known_run_hashes: dict[str, str] | None = None,
+    ) -> list[SessionRecord]:
+        """List normalized session summaries in the selected time window."""
+
+    def find_session_path(
+        self, session_id: str, traces_dir: Path | None = None
+    ) -> Path | None:
+        """Resolve one session file path by session_id."""
+
+    def read_session(
+        self, session_path: Path, session_id: str | None = None
+    ) -> ViewerSession | None:
+        """Read one session file and return a normalized viewer payload."""
+```
+
+## Data models
+
+Adapters work with three key data classes:
+
+### ViewerSession
+
+The normalized output format for a single session:
+
+```python
+@dataclass
+class ViewerSession:
+    session_id: str
+    cwd: str | None = None
+    git_branch: str | None = None
+    messages: list[ViewerMessage] = field(default_factory=list)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    meta: dict[str, Any] = field(default_factory=dict)
+```
+
+### ViewerMessage
+
+A single message within a session:
+
+```python
+@dataclass
+class ViewerMessage:
+    role: str  # "user", "assistant", "tool", "system"
+    content: str | None = None
+    timestamp: str | None = None
+    model: str | None = None
+    tool_name: str | None = None
+    tool_input: Any | None = None
+    tool_output: Any | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+```
+
+### SessionRecord
+
+Summary metadata for session indexing:
+
+```python
+@dataclass(frozen=True)
+class SessionRecord:
+    run_id: str
+    agent_type: str
+    session_path: str
+    start_time: str | None = None
+    repo_path: str | None = None
+    repo_name: str | None = None
+    status: str = "completed"
+    duration_ms: int = 0
+    message_count: int = 0
+    tool_call_count: int = 0
+    error_count: int = 0
+    total_tokens: int = 0
+    summaries: list[str] = field(default_factory=list)
+    content_hash: str | None = None
+```
+
+## Step-by-step implementation
+
+<Steps>
+  <Step title="Create the adapter file">
+    Create a new file in `src/lerim/adapters/` named after your platform:
+
+    ```bash
+    touch src/lerim/adapters/myplatform.py
+    ```
+
+    Start with a top-level docstring:
+
+    ```python
+    """MyPlatform session adapter for reading traces and converting to JSONL."""
+
+    from __future__ import annotations
+
+    from datetime import datetime
+    from pathlib import Path
+
+    from lerim.adapters.base import SessionRecord, ViewerMessage, ViewerSession
+    from lerim.adapters.common import (
+        compute_file_hash,
+        count_non_empty_files,
+        in_window,
+        load_jsonl_dict_lines,
+        parse_timestamp,
+    )
+    ```
+  </Step>
+
+  <Step title="Implement default_path()">
+    Return the default location where your platform stores session traces:
+
+    ```python
+    def default_path() -> Path | None:
+        """Return the default MyPlatform traces directory."""
+        return Path("~/.myplatform/sessions/").expanduser()
+    ```
+
+    <Note>
+    Use `expanduser()` to resolve `~` to the user's home directory. Return `None` if there's no standard default.
+    </Note>
+  </Step>
+
+  <Step title="Implement count_sessions()">
+    Count how many sessions exist in a given directory:
+
+    ```python
+    def count_sessions(path: Path) -> int:
+        """Count readable non-empty MyPlatform session files."""
+        return count_non_empty_files(path, "*.jsonl")
+    ```
+
+    Adjust the pattern (`*.jsonl`, `*.db`, etc.) based on your platform's format.
+  </Step>
+
+  <Step title="Implement find_session_path()">
+    Given a session ID, locate the corresponding file:
+
+    ```python
+    def find_session_path(
+        session_id: str, traces_dir: Path | None = None
+    ) -> Path | None:
+        """Find a MyPlatform session file by ID."""
+        base = traces_dir or default_path()
+        if base is None or not base.exists():
+            return None
+        
+        for path in base.rglob("*.jsonl"):
+            if path.stem == session_id:
+                return path
+        return None
+    ```
+  </Step>
+
+  <Step title="Implement read_session()">
+    Parse a single session file into a `ViewerSession`:
+
+    ```python
+    def read_session(
+        session_path: Path, session_id: str | None = None
+    ) -> ViewerSession | None:
+        """Parse one MyPlatform session file into normalized messages."""
+        messages: list[ViewerMessage] = []
+        total_input = 0
+        total_output = 0
+        cwd = None
+        git_branch = None
+
+        for entry in load_jsonl_dict_lines(session_path):
+            entry_type = entry.get("type")
+            timestamp = entry.get("timestamp")
+
+            if entry_type == "user":
+                content = entry.get("content", "")
+                messages.append(
+                    ViewerMessage(
+                        role="user",
+                        content=content,
+                        timestamp=timestamp
+                    )
+                )
+            elif entry_type == "assistant":
+                content = entry.get("content", "")
+                model = entry.get("model")
+                messages.append(
+                    ViewerMessage(
+                        role="assistant",
+                        content=content,
+                        timestamp=timestamp,
+                        model=model
+                    )
+                )
+
+            # Extract token counts if available
+            usage = entry.get("usage", {})
+            total_input += usage.get("input_tokens", 0)
+            total_output += usage.get("output_tokens", 0)
+
+        return ViewerSession(
+            session_id=session_id or session_path.stem,
+            cwd=cwd,
+            git_branch=git_branch,
+            messages=messages,
+            total_input_tokens=total_input,
+            total_output_tokens=total_output,
+        )
+    ```
+
+    <Accordion title="Handling tool calls">
+    If your platform supports tool calls, track them by ID:
+
+    ```python
+    tool_messages: dict[str, ViewerMessage] = {}
+
+    # When you encounter a tool use:
+    tool_id = entry.get("tool_id")
+    tool_msg = ViewerMessage(
+        role="tool",
+        tool_name=entry.get("tool_name"),
+        tool_input=entry.get("tool_input"),
+        timestamp=timestamp
+    )
+    tool_messages[tool_id] = tool_msg
+    messages.append(tool_msg)
+
+    # When you encounter a tool result:
+    tool_id = entry.get("tool_id")
+    if tool_id in tool_messages:
+        tool_messages[tool_id].tool_output = entry.get("output")
+    ```
+    </Accordion>
+  </Step>
+
+  <Step title="Implement iter_sessions()">
+    Enumerate all sessions with metadata, respecting time windows and known hashes:
+
+    ```python
+    def iter_sessions(
+        traces_dir: Path | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        known_run_hashes: dict[str, str] | None = None,
+    ) -> list[SessionRecord]:
+        """Enumerate MyPlatform sessions, skipping unchanged files."""
+        base = traces_dir or default_path()
+        if base is None or not base.exists():
+            return []
+
+        records: list[SessionRecord] = []
+        for path in base.rglob("*.jsonl"):
+            run_id = path.stem
+            file_hash = compute_file_hash(path)
+
+            # Skip if unchanged
+            if known_run_hashes and run_id in known_run_hashes:
+                if known_run_hashes[run_id] == file_hash:
+                    continue
+
+            entries = load_jsonl_dict_lines(path)
+            if not entries:
+                continue
+
+            # Extract metadata
+            start_time: datetime | None = None
+            message_count = 0
+            tool_calls = 0
+            total_tokens = 0
+
+            for entry in entries:
+                ts = parse_timestamp(entry.get("timestamp"))
+                if ts and (start_time is None or ts < start_time):
+                    start_time = ts
+
+                if entry.get("type") in {"user", "assistant"}:
+                    message_count += 1
+
+                usage = entry.get("usage", {})
+                total_tokens += usage.get("input_tokens", 0)
+                total_tokens += usage.get("output_tokens", 0)
+
+            # Filter by time window
+            if not in_window(start_time, start, end):
+                continue
+
+            records.append(
+                SessionRecord(
+                    run_id=run_id,
+                    agent_type="myplatform",
+                    session_path=str(path),
+                    start_time=start_time.isoformat() if start_time else None,
+                    message_count=message_count,
+                    tool_call_count=tool_calls,
+                    total_tokens=total_tokens,
+                    content_hash=file_hash,
+                )
+            )
+
+        records.sort(key=lambda r: r.start_time or "")
+        return records
+    ```
+  </Step>
+
+  <Step title="Register the adapter">
+    Add your adapter to the registry in `src/lerim/adapters/registry.py`:
+
+    ```python
+    _ADAPTER_MODULES: dict[str, str] = {
+        "claude": "lerim.adapters.claude",
+        "codex": "lerim.adapters.codex",
+        "opencode": "lerim.adapters.opencode",
+        "cursor": "lerim.adapters.cursor",
+        "myplatform": "lerim.adapters.myplatform",  # Add this line
+    }
+    ```
+
+    Optionally add it to auto-seed platforms:
+
+    ```python
+    _AUTO_SEED_PLATFORMS = (
+        "claude", "codex", "opencode", "cursor", "myplatform"
+    )
+    ```
+  </Step>
+
+  <Step title="Add unit tests">
+    Create `tests/unit/test_myplatform_adapter.py`:
+
+    ```python
+    """Tests for MyPlatform adapter."""
+
+    from pathlib import Path
+    from lerim.adapters import myplatform
+
+    def test_default_path():
+        """Test default path resolution."""
+        path = myplatform.default_path()
+        assert path is not None
+        assert "myplatform" in str(path).lower()
+
+    def test_read_session(tmp_path):
+        """Test session reading."""
+        session_file = tmp_path / "test.jsonl"
+        session_file.write_text(
+            '{"type":"user","content":"hello","timestamp":"2026-03-01T10:00:00Z"}\n'
+            '{"type":"assistant","content":"hi","timestamp":"2026-03-01T10:00:01Z"}\n'
+        )
+
+        session = myplatform.read_session(session_file)
+        assert session is not None
+        assert len(session.messages) == 2
+        assert session.messages[0].role == "user"
+        assert session.messages[0].content == "hello"
+        assert session.messages[1].role == "assistant"
+        assert session.messages[1].content == "hi"
+    ```
+
+    Run your tests:
+    ```bash
+    pytest tests/unit/test_myplatform_adapter.py -v
+    ```
+  </Step>
+
+  <Step title="Update documentation">
+    Add your test file to `tests/README.md`:
+
+    ```markdown
+    | `test_myplatform_adapter.py` | MyPlatform adapter parsing and session discovery |
+    ```
+  </Step>
+</Steps>
+
+## Real-world example: Claude adapter
+
+Here's an abbreviated version of the Claude adapter showing the key patterns:
+
+```python src/lerim/adapters/claude.py
+"""Claude desktop session adapter for reading JSONL trace sessions."""
+
+from pathlib import Path
+from lerim.adapters.base import ViewerMessage, ViewerSession
+from lerim.adapters.common import load_jsonl_dict_lines
+
+def default_path() -> Path | None:
+    """Return the default Claude traces directory."""
+    return Path("~/.claude/projects/").expanduser()
+
+def read_session(
+    session_path: Path, session_id: str | None = None
+) -> ViewerSession | None:
+    """Parse one Claude session JSONL file into normalized viewer messages."""
+    messages: list[ViewerMessage] = []
+    total_input = 0
+    total_output = 0
+
+    for entry in load_jsonl_dict_lines(session_path):
+        entry_type = entry.get("type")
+        timestamp = entry.get("timestamp")
+
+        if entry_type == "user":
+            content = entry.get("message", {}).get("content", "")
+            messages.append(
+                ViewerMessage(role="user", content=content, timestamp=timestamp)
+            )
+
+        elif entry_type == "assistant":
+            msg_data = entry.get("message", {})
+            usage = msg_data.get("usage", {})
+            total_input += usage.get("input_tokens", 0)
+            total_output += usage.get("output_tokens", 0)
+
+            content = msg_data.get("content", "")
+            messages.append(
+                ViewerMessage(
+                    role="assistant",
+                    content=content,
+                    timestamp=timestamp,
+                    model=msg_data.get("model")
+                )
+            )
+
+    return ViewerSession(
+        session_id=session_id or session_path.stem,
+        messages=messages,
+        total_input_tokens=total_input,
+        total_output_tokens=total_output,
+    )
+```
+
+## Common utilities
+
+The `lerim.adapters.common` module provides shared helpers:
+
+<CodeGroup>
+```python Timestamp parsing
+from lerim.adapters.common import parse_timestamp
+
+# Handles ISO strings, Unix timestamps (seconds or ms), datetime objects
+ts = parse_timestamp("2026-03-01T10:00:00Z")
+ts = parse_timestamp(1709294400)
+ts = parse_timestamp(1709294400000)  # milliseconds
+```
+
+```python JSONL loading
+from lerim.adapters.common import load_jsonl_dict_lines
+
+# Returns only dict entries, skips invalid JSON and non-dict types
+entries = load_jsonl_dict_lines(Path("/path/to/session.jsonl"))
+for entry in entries:
+    print(entry.get("type"))
+```
+
+```python File hashing
+from lerim.adapters.common import compute_file_hash
+
+# SHA-256 hex digest for change detection
+hash = compute_file_hash(Path("/path/to/session.jsonl"))
+```
+
+```python Time window filtering
+from lerim.adapters.common import in_window
+from datetime import datetime, timezone
+
+now = datetime.now(timezone.utc)
+if in_window(now, start=None, end=now):
+    print("Within window")
+```
+
+```python Counting files
+from lerim.adapters.common import count_non_empty_files
+
+# Count non-empty files matching a glob pattern
+count = count_non_empty_files(Path("/traces"), "*.jsonl")
+```
+</CodeGroup>
+
+## Testing your adapter
+
+Once implemented, test your adapter end-to-end:
+
+<Steps>
+  <Step title="Connect your platform">
+    ```bash
+    lerim connect myplatform
+    ```
+  </Step>
+
+  <Step title="Verify session discovery">
+    ```bash
+    lerim status
+    ```
+    Check that your platform appears with a session count.
+  </Step>
+
+  <Step title="Run a sync">
+    ```bash
+    lerim sync --max-sessions 1
+    ```
+    Verify that sessions are indexed and memories are extracted.
+  </Step>
+
+  <Step title="View in dashboard">
+    ```bash
+    lerim dashboard
+    ```
+    Open `http://localhost:8765` and check the "Runs" tab for your platform's sessions.
+  </Step>
+</Steps>
+
+## SQLite to JSONL pattern
+
+Some platforms (like Cursor and OpenCode) store sessions in SQLite databases. For these, you need to:
+
+1. Read from SQLite
+2. Convert to JSONL format
+3. Cache the JSONL files
+4. Return JSONL paths to Lerim
+
+<Accordion title="Example: Cursor adapter pattern">
+```python
+import sqlite3
+from pathlib import Path
+
+def read_session(
+    session_path: Path, session_id: str | None = None
+) -> ViewerSession | None:
+    """Read Cursor session from SQLite, export to JSONL cache."""
+    # Connect to SQLite database
+    conn = sqlite3.connect(session_path)
+    cursor = conn.cursor()
+
+    # Query session data
+    cursor.execute(
+        "SELECT data FROM sessions WHERE id = ?",
+        (session_id,)
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    # Parse and convert to ViewerSession
+    # ... (platform-specific logic)
+
+    conn.close()
+    return session
+```
+</Accordion>
+
+## Pull request checklist
+
+Before submitting your adapter PR:
+
+<Steps>
+  <Step title="Code quality">
+    - [ ] `ruff check src/ tests/` passes with no errors
+    - [ ] Top-level docstring in adapter file
+    - [ ] Function docstrings for all five protocol methods
+  </Step>
+
+  <Step title="Testing">
+    - [ ] Unit tests in `tests/unit/test_<platform>_adapter.py`
+    - [ ] `tests/run_tests.sh unit` passes
+    - [ ] Tested with real sessions from the platform
+  </Step>
+
+  <Step title="Documentation">
+    - [ ] Added to `_ADAPTER_MODULES` in `registry.py`
+    - [ ] (Optional) Added to `_AUTO_SEED_PLATFORMS`
+    - [ ] Test file documented in `tests/README.md`
+  </Step>
+
+  <Step title="Real-world validation">
+    - [ ] `lerim connect <platform>` works
+    - [ ] `lerim sync` extracts memories correctly
+    - [ ] Sessions appear in dashboard
+  </Step>
+</Steps>
+
+## Common pitfalls
+
+<Warning>
+**Timestamp format inconsistencies**: Different platforms use different timestamp formats (ISO strings, Unix seconds, Unix milliseconds). Always use `parse_timestamp()` from `common.py`.
+</Warning>
+
+<Warning>
+**Tool call pairing**: Some platforms send tool use and tool result in separate messages. Track tool calls by ID and pair them later (see Claude adapter for reference).
+</Warning>
+
+<Warning>
+**Empty content handling**: Some platforms may have empty or null content fields. Always check for `None` and empty strings before adding messages.
+</Warning>
+
+<Warning>
+**Nested content structures**: Platforms like Claude use nested content arrays. Flatten these into plain text for `ViewerMessage.content`.
+</Warning>
+
+## Getting help
+
+If you're stuck or have questions:
+
+- Browse existing adapters in `src/lerim/adapters/`
+- Check the [Contributing Guide](/contributing/getting-started)
+- Open a [GitHub issue](https://github.com/lerim-dev/lerim-cli/issues)
+- Look at adapter tests in `tests/unit/test_*_adapter.py`
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Getting started" icon="rocket" href="/contributing/getting-started">
+    Set up your development environment
+  </Card>
+
+  <Card title="Testing" icon="flask" href="/contributing/testing">
+    Learn the test structure and write comprehensive tests
+  </Card>
+</CardGroup>

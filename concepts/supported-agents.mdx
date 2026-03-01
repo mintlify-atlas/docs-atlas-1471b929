@@ -1,0 +1,499 @@
+---
+title: Supported agents
+description: Learn which coding agent platforms are supported, their session formats, and how to connect them
+---
+
+Lerim supports multiple coding agent platforms through a unified adapter system. Each adapter knows how to discover, read, and normalize sessions from its platform into a common format.
+
+## Supported platforms
+
+<CardGroup cols={2}>
+  <Card title="Claude Code" icon="message" color="#C983FF">
+    Desktop CLI with JSONL session traces
+  </Card>
+  <Card title="Codex CLI" icon="terminal" color="#3B82F6">
+    Command-line agent with JSONL traces
+  </Card>
+  <Card title="Cursor" icon="cursor" color="#000000">
+    VS Code fork with SQLite storage
+  </Card>
+  <Card title="OpenCode" icon="code" color="#10B981">
+    Open-source CLI with SQLite database
+  </Card>
+</CardGroup>
+
+<Note>
+More agents coming soon — PRs welcome! See `src/lerim/adapters/` for examples.
+</Note>
+
+## Platform details
+
+### Claude Code
+
+**Session format**: JSONL (JSON Lines)
+
+**Default storage path**:
+```bash
+~/.claude/projects/
+```
+
+**Session structure**:
+- One `.jsonl` file per session
+- Each line is a JSON object with `type`, `message`, `timestamp`, and optional `gitBranch` and `cwd`
+- Message types: `user`, `assistant`, `system`, `summary`
+- Tool calls embedded in `message.content` blocks
+
+**Example session entry**:
+```json
+{"type": "user", "message": {"content": "Fix the auth bug"}, "timestamp": "2026-02-20T10:30:00Z", "cwd": "/Users/dev/my-app", "gitBranch": "main"}
+```
+
+**Connecting**:
+```bash
+lerim connect claude
+
+# Custom path
+lerim connect claude --path /custom/path/to/sessions
+```
+
+**Verification**:
+```bash
+# Check if Claude sessions are detected
+ls ~/.claude/projects/*.jsonl | head -5
+
+# Count sessions
+lerim connect list
+```
+
+<Tip>
+Claude Code sessions include git branch and working directory metadata, making them ideal for project-scoped memory.
+</Tip>
+
+---
+
+### Codex CLI
+
+**Session format**: JSONL (JSON Lines)
+
+**Default storage path**:
+```bash
+~/.codex/sessions/
+```
+
+**Session structure**:
+- One `.jsonl` file per session
+- Two entry types: `response_item` (actual messages) and `event_msg` (lifecycle events)
+- Response item types: `message`, `function_call`, `custom_tool_call`, `function_call_output`, `custom_tool_call_output`
+- Token usage tracked in `event_msg` entries with `type: token_count`
+
+**Example session entry**:
+```json
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Add login endpoint"}, "timestamp": "2026-02-21T14:00:00Z"}
+```
+
+**Connecting**:
+```bash
+lerim connect codex
+
+# Custom path
+lerim connect codex --path /custom/path/to/sessions
+```
+
+**Verification**:
+```bash
+# Check if Codex sessions are detected
+ls ~/.codex/sessions/*.jsonl | head -5
+
+# Count sessions
+lerim connect list
+```
+
+<Info>
+Codex CLI tracks reasoning tokens separately from input/output tokens. Lerim sums all three for total token count.
+</Info>
+
+---
+
+### Cursor
+
+**Session format**: SQLite database (exported to JSONL cache)
+
+**Default storage path**:
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    ~/Library/Application Support/Cursor/User/globalStorage/
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    ~/.config/Cursor/User/globalStorage/
+    ```
+  </Tab>
+</Tabs>
+
+**Database structure**:
+- Single `state.vscdb` SQLite database
+- Table: `cursorDiskKV`
+- Session metadata in rows with key `composerData:<composerId>`
+- Messages ("bubbles") in rows with key `bubbleId:<composerId>:<bubbleId>`
+- Values are JSON-encoded (sometimes double-encoded)
+
+**Export behavior**:
+- Lerim exports each session to `~/.lerim/cache/cursor/{composerId}.jsonl`
+- First line: composer metadata (session info)
+- Remaining lines: one bubble per line
+- Cached JSONL files are reused across syncs (hash-based change detection)
+
+**Bubble types**:
+- `type: 1` = user message
+- `type: 2` = assistant message
+- Other types = tool calls or system events
+
+**Connecting**:
+```bash
+lerim connect cursor
+
+# Custom path (point to directory containing state.vscdb)
+lerim connect cursor --path ~/custom/Cursor/globalStorage
+```
+
+**Verification**:
+```bash
+# Check if Cursor DB exists
+ls "~/Library/Application Support/Cursor/User/globalStorage/"*/state.vscdb
+
+# Validate connection
+python -c "from lerim.adapters import cursor; print(cursor.validate_connection(cursor.default_path()))"
+
+# Count sessions
+lerim connect list
+```
+
+<Warning>
+Cursor's SQLite database is locked while Cursor is running. Close Cursor before running `lerim sync` to avoid "database is locked" errors, or rely on cached JSONL exports.
+</Warning>
+
+---
+
+### OpenCode
+
+**Session format**: SQLite database (exported to JSONL cache)
+
+**Default storage path**:
+```bash
+~/.local/share/opencode/
+```
+
+**Database structure**:
+- Single `opencode.db` SQLite database
+- Tables: `session`, `message`, `part`
+- Session metadata in `session` table
+- Messages in `message` table with foreign key `session_id`
+- Message parts (text, tool calls) in `part` table with foreign key `message_id`
+- Timestamps are millisecond-epoch integers
+
+**Export behavior**:
+- Lerim exports each session to `~/.lerim/cache/opencode/{session_id}.jsonl`
+- First line: session metadata (cwd, title, tokens, etc.)
+- Remaining lines: one message per line (text or tool)
+- Cached JSONL files are reused across syncs
+
+**Message structure**:
+- `role`: `user`, `assistant`, or `tool`
+- Text parts: `{"role": "user", "content": "...", "timestamp": "...", "model": "..."}`
+- Tool parts: `{"role": "tool", "tool_name": "...", "tool_input": {...}, "tool_output": "...", "timestamp": "..."}`
+
+**Connecting**:
+```bash
+lerim connect opencode
+
+# Custom path (point to directory containing opencode.db)
+lerim connect opencode --path /custom/path/to/opencode
+```
+
+**Verification**:
+```bash
+# Check if OpenCode DB exists
+ls ~/.local/share/opencode/opencode.db
+
+# Validate connection
+python -c "from lerim.adapters import opencode; print(opencode.validate_connection(opencode.default_path()))"
+
+# Count sessions
+lerim connect list
+```
+
+<Tip>
+OpenCode tracks reasoning tokens separately. Lerim sums input, output, and reasoning tokens for accurate cost tracking.
+</Tip>
+
+## Adapter architecture
+
+All platform adapters implement a common protocol defined in `src/lerim/adapters/base.py`:
+
+```python
+class Adapter(Protocol):
+    def default_path(self) -> Path | None:
+        """Return the default traces directory for this platform."""
+    
+    def count_sessions(self, path: Path) -> int:
+        """Return total session count under path."""
+    
+    def iter_sessions(
+        self,
+        traces_dir: Path | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        known_run_hashes: dict[str, str] | None = None,
+    ) -> list[SessionRecord]:
+        """List normalized session summaries in time window."""
+    
+    def find_session_path(
+        self, session_id: str, traces_dir: Path | None = None
+    ) -> Path | None:
+        """Resolve one session file path by session_id."""
+    
+    def read_session(
+        self, session_path: Path, session_id: str | None = None
+    ) -> ViewerSession | None:
+        """Read one session file and return normalized viewer payload."""
+```
+
+### Session normalization
+
+Each adapter normalizes platform-specific session formats into a common `ViewerSession` structure:
+
+```python
+@dataclass
+class ViewerSession:
+    session_id: str
+    cwd: str | None = None
+    git_branch: str | None = None
+    messages: list[ViewerMessage] = field(default_factory=list)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    meta: dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class ViewerMessage:
+    role: str  # "user", "assistant", "tool"
+    content: str | None = None
+    timestamp: str | None = None
+    model: str | None = None
+    tool_name: str | None = None
+    tool_input: Any | None = None
+    tool_output: Any | None = None
+```
+
+This normalized format is used by:
+
+- The extraction pipeline (to analyze transcripts)
+- The dashboard (to render session viewers)
+- The sync process (to generate summaries)
+
+## Connecting platforms
+
+### Auto-detect all platforms
+
+The simplest way to connect platforms is auto-detection:
+
+```bash
+lerim connect auto
+```
+
+This scans default paths for all supported platforms and registers any that are found.
+
+### Connect specific platforms
+
+Connect one platform at a time:
+
+```bash
+lerim connect claude
+lerim connect codex
+lerim connect cursor
+lerim connect opencode
+```
+
+### Custom session paths
+
+If your agent stores sessions in a non-default location, use `--path`:
+
+```bash
+lerim connect claude --path /custom/path/to/claude/sessions
+lerim connect cursor --path ~/my-cursor-data/globalStorage
+```
+
+<Info>
+Paths are expanded (`~` is resolved) and must exist on disk. Custom paths override the auto-detected defaults.
+</Info>
+
+### List connected platforms
+
+```bash
+lerim connect list
+```
+
+Example output:
+```
+Connected platforms:
+  claude      ~/.claude/projects/              (142 sessions)
+  codex       ~/.codex/sessions/               (89 sessions)
+  cursor      ~/Library/.../Cursor/.../        (56 sessions)
+  opencode    ~/.local/share/opencode/         (23 sessions)
+```
+
+### Disconnect platforms
+
+```bash
+lerim connect remove claude
+lerim connect remove cursor
+```
+
+<Warning>
+Disconnecting a platform does not delete existing memories or session indexes. It only stops Lerim from syncing new sessions from that platform.
+</Warning>
+
+## Session formats compared
+
+| Platform | Format | Storage | Change Detection | Tool Calls | Token Tracking |
+|----------|--------|---------|------------------|------------|-----------------|
+| Claude Code | JSONL | File per session | File hash | In message content | Usage per message |
+| Codex CLI | JSONL | File per session | File hash | Separate response items | Event messages |
+| Cursor | SQLite → JSONL cache | Single DB | JSONL file hash | Bubble types | No built-in tracking |
+| OpenCode | SQLite → JSONL cache | Single DB | JSONL file hash | Part entries | Per-message tokens |
+
+## Troubleshooting
+
+### Platform not detected
+
+<AccordionGroup>
+  <Accordion title="Check default path">
+    Verify that sessions exist at the default path:
+    
+    ```bash
+    # Claude
+    ls ~/.claude/projects/*.jsonl | head -5
+    
+    # Codex
+    ls ~/.codex/sessions/*.jsonl | head -5
+    
+    # Cursor
+    ls ~/Library/Application\ Support/Cursor/User/globalStorage/*/state.vscdb
+    
+    # OpenCode
+    ls ~/.local/share/opencode/opencode.db
+    ```
+  </Accordion>
+  
+  <Accordion title="Use custom path">
+    If sessions are stored elsewhere, use `--path`:
+    
+    ```bash
+    lerim connect <platform> --path /path/to/sessions
+    ```
+  </Accordion>
+  
+  <Accordion title="Check platform spelling">
+    Platform names must be exact: `claude`, `codex`, `cursor`, `opencode` (lowercase).
+  </Accordion>
+</AccordionGroup>
+
+### No sessions synced
+
+<AccordionGroup>
+  <Accordion title="Verify platform is connected">
+    ```bash
+    lerim connect list
+    ```
+    
+    If the platform isn't listed, connect it first:
+    
+    ```bash
+    lerim connect <platform>
+    ```
+  </Accordion>
+  
+  <Accordion title="Check session count">
+    The `connect list` output shows session counts. If it shows 0 sessions, verify that session files exist.
+  </Accordion>
+  
+  <Accordion title="Check project registration">
+    Sessions are only synced if they match a registered project's `repo_path`:
+    
+    ```bash
+    lerim project list
+    ```
+    
+    Register your project if it's not listed:
+    
+    ```bash
+    lerim project add .
+    ```
+  </Accordion>
+  
+  <Accordion title="Check session metadata">
+    For sessions to be matched to a project, they must include working directory metadata (`cwd` or `repo_path`). Some agent sessions may lack this metadata.
+  </Accordion>
+</AccordionGroup>
+
+### Cursor database locked
+
+<AccordionGroup>
+  <Accordion title="Close Cursor before syncing">
+    Cursor locks `state.vscdb` while running. Close Cursor, then run:
+    
+    ```bash
+    lerim sync
+    ```
+  </Accordion>
+  
+  <Accordion title="Use cached JSONL exports">
+    Once sessions are exported to `~/.lerim/cache/cursor/`, Lerim uses those cached files instead of reading the DB directly.
+  </Accordion>
+</AccordionGroup>
+
+### OpenCode database not found
+
+<AccordionGroup>
+  <Accordion title="Check default path">
+    OpenCode stores its database at `~/.local/share/opencode/opencode.db` on Linux. On macOS, the path may differ.
+  </Accordion>
+  
+  <Accordion title="Verify OpenCode has been used">
+    The database is only created after you've used OpenCode at least once. Run OpenCode and complete a session first.
+  </Accordion>
+</AccordionGroup>
+
+## Adding new adapters
+
+Want to add support for a new coding agent? Adapters are simple Python modules:
+
+1. Create a new file in `src/lerim/adapters/` (e.g., `my_agent.py`)
+2. Implement the `Adapter` protocol functions
+3. Add the adapter to `src/lerim/adapters/registry.py`
+4. Submit a PR!
+
+See the [Contributing Guide](https://docs.lerim.dev/contributing/) for details.
+
+<Tip>
+Existing adapters in `src/lerim/adapters/` are well-documented and serve as templates for new adapters.
+</Tip>
+
+## What's next?
+
+<CardGroup cols={2}>
+  <Card title="Sync and maintain" icon="rotate" href="/concepts/sync-maintain">
+    Learn how to sync sessions and maintain memories
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/cli/overview">
+    Explore all connect and sync commands
+  </Card>
+  <Card title="Contributing" icon="code-branch" href="/contributing/getting-started">
+    Add support for a new agent platform
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/connecting-agents#troubleshooting">
+    Debug connection and sync issues
+  </Card>
+</CardGroup>

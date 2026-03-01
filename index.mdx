@@ -1,97 +1,148 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: Introduction to Lerim
+description: A continual learning layer that gives coding agents persistent, shared memory across sessions and platforms
 ---
 
-## Setting up
+<img src="/assets/lerim.png" alt="Lerim Logo" width="160" />
 
-Get your documentation site up and running in minutes.
+## Your coding agents forget everything after each session. Lerim remembers — across all of them.
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+Lerim is a **continual learning layer** that gives coding agents persistent, shared memory across sessions and platforms. Use Claude Code, Cursor, Codex, and OpenCode on the same project — Lerim unifies their knowledge into one memory store that every agent can query.
 
-## Make it yours
+<img src="/assets/agent-network.gif" alt="Lerim network animation" width="450" />
 
-Design a docs site that looks great and empowers your users.
+## The problem
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+You spend 20 minutes explaining context to your coding agent. It writes great code. Next session? It's forgotten everything. Every decision, every pattern, every "we tried X and it didn't work" — gone.
+
+And if you use multiple agents — Claude Code at the terminal, Cursor in the IDE, Codex for reviews — none of them know what the others learned. Your project knowledge is **scattered across isolated sessions with no shared memory**.
+
+This is **agent context amnesia**, and it's the biggest productivity drain in AI-assisted development.
+
+## The solution
+
+Lerim solves this by:
+
+- **Watching** your agent sessions across Claude Code, Codex CLI, Cursor, and OpenCode
+- **Extracting** decisions and learnings automatically using LLM pipelines
+- **Storing** everything as plain markdown files in your repo (`.lerim/`)
+- **Refining** memories continuously — merges duplicates, archives stale entries, applies time-based decay
+- **Unifying** knowledge across all your agents — what Cursor learns, Claude Code can recall
+- **Answering** questions about past context: `lerim ask "why did we choose Postgres?"`
+
+No proprietary format. No database lock-in. Just markdown files that both humans and agents can read. Memories get smarter over time, not stale.
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get from zero to first working command in under 5 minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed installation instructions and prerequisites
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="CLI reference" icon="terminal" href="/cli/overview">
+    Complete command-line interface documentation
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Architecture" icon="diagram-project" href="/architecture/overview">
+    How Lerim works under the hood
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Key features
 
-Everything you need to create world-class documentation.
+<CardGroup cols={3}>
+  <Card title="Multi-agent support" icon="users">
+    Works with Claude Code, Cursor, Codex CLI, and OpenCode
+  </Card>
+  <Card title="Plain markdown storage" icon="file-lines">
+    No proprietary formats — just `.md` files in `.lerim/`
+  </Card>
+  <Card title="Automatic extraction" icon="wand-magic-sparkles">
+    LLM pipelines extract decisions and learnings from sessions
+  </Card>
+  <Card title="Continuous refinement" icon="arrows-rotate">
+    Merges duplicates, archives stale entries, applies time decay
+  </Card>
+  <Card title="Natural language queries" icon="message-question">
+    Ask questions about past context in plain English
+  </Card>
+  <Card title="Local-first" icon="computer">
+    Runs entirely on your machine with Docker or standalone
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Supported agents
 
-## Need inspiration?
+| Agent | Session Format | Status |
+|-------|---------------|--------|
+| Claude Code | JSONL traces | Supported |
+| Codex CLI | JSONL traces | Supported |
+| Cursor | SQLite to JSONL | Supported |
+| OpenCode | SQLite to JSONL | Supported |
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+More agents coming soon — PRs welcome! See the [contributing guide](/contributing/getting-started) to add support for your favorite agent.
+</Note>
+
+## How it works
+
+Lerim is file-first and primitive-first:
+
+- **Primitive folders**: `decisions`, `learnings`, `summaries`
+- **Project memory first**: `<repo>/.lerim/`
+- **Global fallback memory**: `~/.lerim/`
+- **Search default**: `files` (no index required)
+- **Orchestration runtime**: `pydantic-ai` lead agent + read-only explorer subagent
+- **Extraction/summarization**: `dspy.ChainOfThought` with transcript windowing, role-configured models
+
+This keeps memory readable by humans and easy for agents to traverse.
+
+### Sync path
+
+<img src="/assets/sync.png" alt="Sync path diagram" width="700" />
+
+The sync path processes new agent sessions: reads transcript archives, extracts decision and learning candidates via DSPy, deduplicates against existing memories, and writes new primitives to the memory folder.
+
+### Maintain path
+
+<img src="/assets/maintain.png" alt="Maintain path diagram" width="700" />
+
+The maintain path runs offline refinement over stored memories: merges duplicates, archives low-value entries, consolidates related memories, and applies time-based decay to keep the memory store clean and relevant.
+
+## Dashboard
+
+Lerim includes a local web UI for session analytics, memory browsing, and runtime status.
+
+<img src="/assets/dashboard.png" alt="Lerim dashboard" width="1100" />
+
+Access it at `http://localhost:8765` after running `lerim up` or `lerim serve`.
+
+### Dashboard features
+
+- **Overview**: High-level metrics and charts for sessions, messages, tools, errors, and tokens
+- **Runs**: Searchable session list with full-screen chat viewer
+- **Memories**: Library and editor for memory records with filters
+- **Pipeline**: Sync/maintain status and extraction queue state
+- **Settings**: Dashboard-editable config for server, model roles, and tracing
+
+## Next steps
+
+<Steps>
+  <Step title="Install Lerim">
+    Follow the [installation guide](/installation) to set up Python, Docker, and API keys
+  </Step>
+  <Step title="Quick start">
+    Complete the [quickstart guide](/quickstart) to get up and running in 5 minutes
+  </Step>
+  <Step title="Connect your agents">
+    Learn how to connect your coding agents in the [connecting agents guide](/guides/connecting-agents)
+  </Step>
+  <Step title="Explore the CLI">
+    Master all commands in the [CLI reference](/cli/overview)
+  </Step>
+</Steps>
+
+<Tip>
+If Lerim saves you from re-explaining context to your agent, give it a ⭐ on [GitHub](https://github.com/lerim-dev/lerim-cli)
+</Tip>

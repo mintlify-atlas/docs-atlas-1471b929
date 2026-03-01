@@ -1,0 +1,215 @@
+---
+title: lerim init
+description: Interactive setup wizard for first-time Lerim configuration
+---
+
+The `lerim init` command runs an interactive setup wizard that detects installed coding agents, prompts you to select which ones to use, and writes the configuration to `~/.lerim/config.toml`.
+
+<Note>
+This is a **host-only** command - it runs locally and does not require a Lerim server.
+</Note>
+
+## Syntax
+
+```bash
+lerim init
+```
+
+No arguments or flags required. The command is fully interactive.
+
+## What it does
+
+1. **Detects coding agents** by checking for their default installation paths:
+   - Claude Code: `~/.claude/projects`
+   - Codex CLI: `~/.codex/sessions`
+   - Cursor: `~/Library/Application Support/Cursor/User/globalStorage` (macOS)
+   - OpenCode: `~/.local/share/opencode`
+
+2. **Prompts for confirmation** - For each detected agent, asks if you want to include it. Defaults to `Y` for detected agents, `N` for missing ones.
+
+3. **Writes config** - Saves selected agents to `~/.lerim/config.toml` with their session store paths.
+
+4. **Checks Docker** - Verifies if Docker is installed. Shows instructions if missing.
+
+5. **Shows next steps** - Displays commands to register projects and start Lerim.
+
+## Interactive flow
+
+```bash
+$ lerim init
+
+Welcome to Lerim.
+
+Which coding agents do you use?
+  claude (detected) [Y/n]: 
+  codex (not found) [y/N]: 
+  cursor (detected) [Y/n]: y
+  opencode (not found) [y/N]: 
+
+Config written to ~/.lerim/config.toml
+Agents: claude, cursor
+
+Docker: found
+
+Next steps:
+  lerim project add /path/to/repo   # register a project
+  lerim up                           # start the Docker service
+```
+
+## Configuration file
+
+The wizard creates `~/.lerim/config.toml` with this structure:
+
+```toml
+# ~/.lerim/config.toml
+
+[agents.claude]
+path = "/Users/you/.claude/projects"
+
+[agents.cursor]
+path = "/Users/you/Library/Application Support/Cursor/User/globalStorage"
+```
+
+You can edit this file manually later to:
+- Add agents that weren't auto-detected
+- Update session store paths
+- Add custom configuration overrides
+
+## Custom agent paths
+
+If your agent stores sessions in a non-standard location, you have two options:
+
+**Option 1:** Edit `~/.lerim/config.toml` after running `init`:
+
+```toml
+[agents.claude]
+path = "/custom/path/to/claude/sessions"
+```
+
+**Option 2:** Use `lerim connect` with the `--path` flag:
+
+```bash
+lerim connect claude --path /custom/path/to/claude/sessions
+```
+
+## Docker requirement
+
+The wizard checks for Docker availability:
+
+- **Docker found** - You can use `lerim up` (recommended)
+- **Docker not found** - You can still run Lerim with `lerim serve` or `lerim daemon` (no container required)
+
+## Re-running init
+
+Running `lerim init` again will:
+- Re-detect agents
+- Prompt for confirmation again
+- **Overwrite** existing `~/.lerim/config.toml` agent configuration
+
+<Warning>
+Running `init` multiple times overwrites the agent section of your config. Manual settings in other sections are preserved, but agent paths will be reset.
+</Warning>
+
+## Examples
+
+### Standard setup
+
+```bash
+lerim init
+# Follow prompts
+lerim project add .
+lerim up
+```
+
+### Setup without Docker
+
+```bash
+lerim init
+# Select your agents
+lerim project add .
+lerim connect auto    # manually connect platforms
+lerim daemon         # run sync loop directly
+```
+
+### Setup for CI/testing
+
+```bash
+# Set custom config location
+export LERIM_CONFIG=/tmp/test-config.toml
+
+# Init will write to LERIM_CONFIG path
+lerim init
+```
+
+## What happens next
+
+After running `init`, you should:
+
+1. **Register projects** - Tell Lerim which repositories to track:
+   ```bash
+   lerim project add ~/codes/my-app
+   lerim project add .
+   ```
+
+2. **Start Lerim** - Launch the service:
+   ```bash
+   lerim up                    # Docker (recommended)
+   # or
+   lerim serve                 # Direct (no Docker)
+   ```
+
+3. **Connect platforms** - Link your coding agents:
+   ```bash
+   lerim connect auto          # Auto-detect all
+   # or
+   lerim connect claude        # Connect specific platform
+   ```
+
+4. **Initial sync** - Extract memories from existing sessions:
+   ```bash
+   lerim sync --window all --max-sessions 50
+   ```
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Setup completed successfully |
+| `2` | User cancelled or invalid input |
+
+## Related commands
+
+- [`lerim project add`](/cli/project) - Register projects after init
+- [`lerim connect`](/cli/connect) - Connect agent platforms
+- [`lerim up`](/cli/up-down-logs) - Start Lerim service
+- [`lerim serve`](/cli/up-down-logs) - Run without Docker
+
+## Troubleshooting
+
+### Agent not detected
+
+If your agent isn't auto-detected:
+
+1. Check the default path exists
+2. Say `y` anyway during init
+3. Edit `~/.lerim/config.toml` to fix the path
+4. Or use `lerim connect <platform> --path /custom/path`
+
+### Config file not created
+
+If `~/.lerim/config.toml` isn't created:
+
+- Check you have write permissions to `~/.lerim/`
+- The directory is created automatically if missing
+- Try running with `LERIM_CONFIG=/tmp/config.toml lerim init` to test
+
+### Docker not required
+
+You can use Lerim without Docker:
+
+```bash
+lerim serve          # Runs HTTP server + daemon loop directly
+lerim daemon         # Runs only sync + maintain loop
+```
+
+Both work without containers.

@@ -1,0 +1,415 @@
+---
+title: lerim sync
+description: Index new sessions and extract memories (hot path)
+---
+
+The `lerim sync` command is the **hot path** for memory extraction. It discovers new agent sessions from connected platforms, indexes them, enqueues them for processing, and runs DSPy extraction to create decision and learning primitives.
+
+<Note>
+This is a **service command** - it requires a running Lerim server started via `lerim up` or `lerim serve`.
+</Note>
+
+## Syntax
+
+```bash
+lerim sync                          # Sync using configured window (default: 7d)
+lerim sync --window <duration>      # Sync specific time window
+lerim sync --agent <platforms>      # Sync specific platforms only
+lerim sync --dry-run                # Preview without writing
+```
+
+## What it does
+
+1. **Scans connected platforms** - Checks session stores for new transcripts (e.g. `~/.claude/projects/*.jsonl`)
+2. **Indexes sessions** - Adds new sessions to the internal SQLite catalog (`~/.lerim/index/sessions.db`)
+3. **Enqueues for extraction** - Marks unprocessed sessions for DSPy extraction
+4. **Runs extraction** - Processes up to `max_sessions` (default: 50) using DSPy chain-of-thought:
+   - Extracts decision candidates (choices made)
+   - Extracts learning candidates (insights gained)
+5. **Deduplicates** - Compares candidates against existing memories
+6. **Writes memories** - Creates new markdown files in `<repo>/.lerim/memory/decisions/` and `learnings/`
+
+## Time window control
+
+The time window determines which sessions are scanned. You can specify:
+
+- **Relative duration** (e.g. `7d`, `24h`, `30m`) - scan recent sessions
+- **Literal `all`** - scan every session ever recorded
+- **Absolute bounds** (`--since` / `--until`) - precise ISO-8601 timestamps
+
+### Duration format
+
+```bash
+<number><unit>
+```
+
+Units:
+- `s` - seconds
+- `m` - minutes
+- `h` - hours
+- `d` - days
+
+Examples: `30s`, `2m`, `1h`, `7d`, `30d`
+
+## Parameters
+
+<ParamField path="--window" type="string" default="7d (from config)">
+  Time window for session discovery. Accepts:
+  - Duration: `30s`, `2m`, `1h`, `7d`, `30d`
+  - Literal: `all` (scan every session)
+  
+  Ignored when `--since` is set.
+
+  ```bash
+  lerim sync --window 30d        # Last 30 days
+  lerim sync --window all        # Everything
+  lerim sync --window 24h        # Last 24 hours
+  ```
+
+  **Default:** `sync_window_days` from config (usually `7d`)
+</ParamField>
+
+<ParamField path="--since" type="string">
+  Absolute start bound (ISO-8601 timestamp). Overrides `--window`.
+
+  ```bash
+  lerim sync --since 2026-02-01T00:00:00Z
+  lerim sync --since 2026-02-01T00:00:00Z --until 2026-02-08T00:00:00Z
+  ```
+
+  **Format:** `YYYY-MM-DDTHH:MM:SSZ` (UTC)
+</ParamField>
+
+<ParamField path="--until" type="string" default="now">
+  Absolute end bound (ISO-8601 timestamp). Only used with `--since`.
+
+  ```bash
+  lerim sync --since 2026-02-01T00:00:00Z --until 2026-02-08T00:00:00Z
+  ```
+
+  **Default:** Current time (now)
+</ParamField>
+
+<ParamField path="--run-id" type="string">
+  Target a single session by its run ID. Bypasses the normal index scan and fetches this session directly.
+  
+  Use with `--force` to re-extract a specific session.
+
+  ```bash
+  lerim sync --run-id abc123def456
+  lerim sync --run-id abc123def456 --force
+  ```
+</ParamField>
+
+<ParamField path="--agent" type="string" default="all">
+  Comma-separated list of platforms to sync. Omit to sync all connected platforms.
+
+  ```bash
+  lerim sync --agent claude
+  lerim sync --agent claude,codex
+  lerim sync --agent cursor
+  ```
+
+  Platform names: `claude`, `codex`, `cursor`, `opencode`
+</ParamField>
+
+<ParamField path="--max-sessions" type="integer" default="50 (from config)">
+  Maximum number of sessions to extract in one run.
+
+  ```bash
+  lerim sync --max-sessions 100
+  lerim sync --max-sessions 10
+  ```
+
+  **Default:** `sync_max_sessions` from config (usually `50`)
+</ParamField>
+
+<ParamField path="--no-extract" type="boolean">
+  Index and enqueue sessions but skip DSPy extraction entirely. Useful to populate the queue without creating memories yet.
+
+  ```bash
+  lerim sync --no-extract
+  ```
+</ParamField>
+
+<ParamField path="--force" type="boolean">
+  Force re-extraction of sessions that were already processed. Without this, already-extracted sessions are skipped.
+
+  ```bash
+  lerim sync --force
+  lerim sync --run-id abc123 --force
+  ```
+</ParamField>
+
+<ParamField path="--dry-run" type="boolean">
+  Preview mode: skip all writes (no indexing, no enqueuing, no extraction). Shows what would happen without changing anything.
+
+  ```bash
+  lerim sync --dry-run
+  lerim sync --window all --dry-run
+  ```
+</ParamField>
+
+<ParamField path="--ignore-lock" type="boolean">
+  Skip the filesystem writer lock. Useful for debugging, but risks corruption if another sync is running concurrently.
+
+  ```bash
+  lerim sync --ignore-lock
+  ```
+
+  <Warning>
+  Only use `--ignore-lock` when debugging. Running multiple syncs concurrently without the lock can corrupt memory files.
+  </Warning>
+</ParamField>
+
+## Examples
+
+### Standard usage
+
+```bash
+# Sync last 7 days (default)
+lerim sync
+
+# Sync last 30 days
+lerim sync --window 30d
+
+# Sync everything
+lerim sync --window all
+```
+
+### Platform filtering
+
+```bash
+# Only sync Claude sessions
+lerim sync --agent claude
+
+# Sync Claude and Codex, skip others
+lerim sync --agent claude,codex
+
+# Sync Cursor sessions from last 24 hours
+lerim sync --agent cursor --window 24h
+```
+
+### Absolute time bounds
+
+```bash
+# Sync February 2026
+lerim sync --since 2026-02-01T00:00:00Z --until 2026-03-01T00:00:00Z
+
+# Sync from Feb 1 to now
+lerim sync --since 2026-02-01T00:00:00Z
+
+# Sync specific week
+lerim sync --since 2026-02-01T00:00:00Z --until 2026-02-08T00:00:00Z
+```
+
+### Re-extract a session
+
+```bash
+# Find run_id from logs or dashboard
+lerim sync --run-id abc123def456 --force
+```
+
+### Preview mode
+
+```bash
+# See what would be synced without writing
+lerim sync --dry-run
+
+# Preview full sync
+lerim sync --window all --dry-run --max-sessions 1000
+```
+
+### Queue population
+
+```bash
+# Index sessions but don't extract yet
+lerim sync --no-extract --window all
+
+# Later, extract from queue
+lerim sync --max-sessions 100
+```
+
+### Batch processing
+
+```bash
+# Process in small batches
+lerim sync --max-sessions 10
+lerim sync --max-sessions 10
+lerim sync --max-sessions 10
+
+# Or one large batch
+lerim sync --max-sessions 100 --window all
+```
+
+## Output
+
+**Human-readable:**
+
+```bash
+$ lerim sync --window 7d
+
+Sync:
+- sessions_scanned: 15
+- sessions_indexed: 3
+- sessions_extracted: 3
+- decisions_added: 5
+- learnings_added: 8
+- duration_seconds: 42.3
+```
+
+**JSON format:**
+
+```bash
+$ lerim sync --json
+
+{
+  "sessions_scanned": 15,
+  "sessions_indexed": 3,
+  "sessions_extracted": 3,
+  "decisions_added": 5,
+  "learnings_added": 8,
+  "duration_seconds": 42.3,
+  "window_start": "2026-02-22T00:00:00Z",
+  "window_end": "2026-03-01T00:00:00Z"
+}
+```
+
+## Memory extraction flow
+
+For each session:
+
+1. **Read transcript** - Load session JSONL from agent platform
+2. **Window transcript** - Chunk large transcripts to fit model context window (300K tokens)
+3. **Extract candidates** - Run DSPy chain-of-thought:
+   - Decision extraction: "What choices were made?"
+   - Learning extraction: "What insights were gained?"
+4. **Deduplicate** - Compare candidates against existing memories by title/body similarity
+5. **Lead decision** - Runtime agent determines: `add`, `update`, or `no-op`
+6. **Write memory** - Create markdown file in `<repo>/.lerim/memory/decisions/` or `learnings/`
+
+## Where memories are written
+
+Memories are project-scoped by default:
+
+```
+<repo>/.lerim/memory/
+  decisions/
+    decision-use-postgres-20260301-abc123.md
+    decision-api-versioning-20260302-def456.md
+  learnings/
+    learning-slow-tests-20260301-ghi789.md
+  summaries/
+    20260301/
+      093045/
+        session-summary.md
+```
+
+If no project is detected, memories go to global scope:
+
+```
+~/.lerim/memory/
+  decisions/
+  learnings/
+```
+
+## Sync vs maintain
+
+| Command | Path | What it does |
+|---------|------|-------------|
+| `lerim sync` | **Hot path** | Index sessions, extract new memories |
+| `lerim maintain` | **Cold path** | Refine existing memories (merge, archive, decay) |
+
+- **Sync** runs frequently (default: every 10 min in daemon mode)
+- **Maintain** runs less often (default: every 60 min in daemon mode)
+
+<Tip>
+Use `lerim sync` to create memories. Use [`lerim maintain`](/cli/maintain) to keep them clean.
+</Tip>
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Sync completed successfully |
+| `1` | Server not running or runtime error |
+| `2` | Usage error (invalid arguments) |
+| `4` | Lock busy (another sync is running) |
+
+## Related commands
+
+- [`lerim connect`](/cli/connect) - Connect agent platforms before syncing
+- [`lerim maintain`](/cli/maintain) - Refine memories after syncing
+- `lerim daemon` - Run continuous sync + maintain loop
+- `lerim status` - Check sync queue status
+- [`lerim up`](/cli/up-down-logs) - Start server before syncing
+
+## Troubleshooting
+
+### "Lerim is not running"
+
+Start the server first:
+
+```bash
+lerim up              # Docker
+# or
+lerim serve &         # Direct
+```
+
+### No sessions found
+
+Check:
+
+1. Are platforms connected?
+   ```bash
+   lerim connect list
+   ```
+
+2. Do session stores exist?
+   ```bash
+   ls ~/.claude/projects
+   ```
+
+3. Is the time window too narrow?
+   ```bash
+   lerim sync --window all --dry-run
+   ```
+
+### Lock busy
+
+Another sync is running. Wait for it to finish, or:
+
+```bash
+# Kill the sync (if stuck)
+lerim down && lerim up
+
+# Or bypass lock (dangerous)
+lerim sync --ignore-lock
+```
+
+### Extraction too slow
+
+Reduce batch size:
+
+```bash
+lerim sync --max-sessions 10
+```
+
+Or use faster models in config:
+
+```toml
+[models.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"  # Fast, cheap
+```
+
+### Re-extract everything
+
+```bash
+# Force re-extraction of all sessions
+lerim sync --window all --force --max-sessions 500
+```
+
+<Warning>
+This will re-process all sessions and may create duplicate memories if deduplication doesn't catch them.
+</Warning>

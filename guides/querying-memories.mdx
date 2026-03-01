@@ -1,0 +1,422 @@
+---
+title: Querying memories
+description: Search and retrieve past decisions and learnings from your coding agent sessions
+---
+
+Lerim extracts decisions and learnings from your agent sessions and stores them as plain markdown files. You can query these memories directly from the CLI or teach your agents to query them automatically.
+
+## Two ways to query
+
+Lerim provides two complementary query methods:
+
+| Command | Use case | Requires server |
+|---------|----------|----------------|
+| `lerim memory search` | Fast keyword search, returns raw matches | No |
+| `lerim ask` | LLM-synthesized answer from multiple memories | Yes |
+
+<Tip>
+Use `memory search` for quick lookups when you can reason over raw results. Use `ask` when you need a synthesized answer across multiple memories.
+</Tip>
+
+## Quick keyword search
+
+The fastest way to find memories is keyword search using `ripgrep` under the hood:
+
+```bash
+lerim memory search "authentication pattern"
+```
+
+This searches across memory titles, bodies, and tags (case-insensitive):
+
+```
+/Users/you/work/my-app/.lerim/memory/decisions/auth-bearer-tokens.md
+4:title: "Auth pattern: bearer tokens"
+5:We chose bearer tokens over session cookies because our API is stateless.
+
+/Users/you/work/my-app/.lerim/memory/learnings/jwt-refresh.md
+3:JWT refresh tokens expire after 7 days. Document this in the API guide.
+```
+
+### Limit results
+
+```bash
+lerim memory search "database migration" --limit 5
+```
+
+### JSON output
+
+```bash
+lerim memory search "pytest" --json
+```
+
+<Note>
+`lerim memory search` works without a running server. It reads memory files directly from disk.
+</Note>
+
+## LLM-powered queries
+
+For questions that need synthesis across multiple memories, use `lerim ask`:
+
+```bash
+lerim ask "What auth pattern do we use?"
+```
+
+Output:
+
+```
+We use bearer tokens for API authentication. JWTs are issued on login and refreshed 
+every 7 days. This was chosen over session cookies because the backend is stateless.
+
+Related decisions:
+- auth-bearer-tokens.md: Initial auth pattern selection
+- jwt-refresh.md: Token lifecycle and expiration policy
+```
+
+<Warning>
+`lerim ask` requires a running Lerim server (`lerim up` or `lerim serve`). It queries the HTTP API to retrieve and synthesize memories.
+</Warning>
+
+### How it works
+
+<Steps>
+  <Step title="Retrieve relevant memories">
+    Lerim searches the memory store for entries matching your question.
+  </Step>
+
+  <Step title="Rank by relevance">
+    Memories are scored based on semantic similarity to your query.
+  </Step>
+
+  <Step title="Synthesize answer">
+    An LLM reads the top memories and generates a concise answer.
+  </Step>
+
+  <Step title="Return with context">
+    The answer includes references to source memory files.
+  </Step>
+</Steps>
+
+### Control context size
+
+Limit how many memories are included:
+
+```bash
+lerim ask "How is the database configured?" --limit 5
+```
+
+Default limit is 12 memories.
+
+### JSON output
+
+```bash
+lerim ask "Why Postgres?" --json
+```
+
+Returns structured data:
+
+```json
+{
+  "question": "Why Postgres?",
+  "answer": "We chose PostgreSQL for its robust JSON support and full-text search...",
+  "memories_used": [
+    "/path/to/.lerim/memory/decisions/postgres-choice.md",
+    "/path/to/.lerim/memory/learnings/pg-jsonb-performance.md"
+  ],
+  "memory_count": 2
+}
+```
+
+## Listing all memories
+
+View recently extracted memories:
+
+```bash
+lerim memory list
+```
+
+Output:
+
+```
+/Users/you/work/my-app/.lerim/memory/decisions/auth-bearer-tokens.md
+/Users/you/work/my-app/.lerim/memory/decisions/postgres-choice.md
+/Users/you/work/my-app/.lerim/memory/learnings/jwt-refresh.md
+/Users/you/work/my-app/.lerim/memory/learnings/pytest-fixture-pattern.md
+```
+
+### Limit results
+
+```bash
+lerim memory list --limit 10
+```
+
+Default limit is 50 memories.
+
+### JSON format
+
+```bash
+lerim memory list --json
+```
+
+## Teaching agents to query memories
+
+The real power of Lerim comes from teaching your coding agents to query memories automatically. This is done through the **Lerim skill**.
+
+### Installing the skill
+
+The Lerim skill works with any agent that supports [skills.ai](https://skills-ai.dev):
+
+```bash
+npx skills add lerim-dev/lerim-cli
+```
+
+Supported agents:
+- Claude Code
+- Codex
+- Cursor
+- Copilot
+- Cline
+- Windsurf
+- OpenCode
+
+### How agents use the skill
+
+Once installed, the skill gives your agent these capabilities:
+
+<CodeGroup>
+```bash Fast keyword search
+lerim memory search "authentication pattern"
+```
+
+```bash LLM-synthesized answers
+lerim ask "Why did we choose SQLite?"
+```
+
+```bash List memories
+lerim memory list
+```
+</CodeGroup>
+
+The skill documentation (`SKILL.md`) is automatically loaded by the agent and provides:
+
+- Command syntax and examples
+- When to use `search` vs `ask`
+- How Lerim works under the hood
+
+### Prompting your agent
+
+At the start of a session, tell your agent:
+
+<CodeGroup>
+```plaintext General context
+Check lerim for any relevant memories about [topic you're working on].
+```
+
+```plaintext Specific query
+Query lerim to see if we've already made decisions about authentication.
+```
+
+```plaintext Before starting
+Before we start, search lerim for past learnings about the database schema.
+```
+</CodeGroup>
+
+Your agent will:
+
+1. Run `lerim memory search` or `lerim ask`
+2. Read the results
+3. Use that context to inform its responses
+4. Avoid repeating past mistakes or reinventing solutions
+
+<Tip>
+Agents should use `memory search` by default (it's faster and doesn't require the server). Use `ask` only when synthesis across multiple memories is needed.
+</Tip>
+
+## Query examples
+
+### Finding past decisions
+
+```bash
+lerim ask "What database did we choose and why?"
+lerim memory search "database choice"
+```
+
+### Debugging patterns
+
+```bash
+lerim ask "How do we handle API errors?"
+lerim memory search "error handling"
+```
+
+### Code patterns
+
+```bash
+lerim memory search "pytest fixture"
+lerim ask "What's our testing pattern?"
+```
+
+### Architecture decisions
+
+```bash
+lerim ask "Why is the backend stateless?"
+lerim memory search "microservices"
+```
+
+### Friction points
+
+```bash
+lerim memory search "slow" --limit 10
+lerim ask "What performance issues have we encountered?"
+```
+
+## Memory structure
+
+Memories are stored as markdown files with YAML frontmatter:
+
+```markdown
+---
+id: auth-bearer-tokens
+title: "Auth pattern: bearer tokens"
+created: 2026-02-15T14:23:00Z
+updated: 2026-02-15T14:23:00Z
+source: claude-abc123
+confidence: 0.9
+tags: [auth, api, security]
+---
+
+We chose bearer tokens over session cookies because our API is stateless.
+JWTs are issued on login with a 7-day expiration. Refresh tokens are stored
+in httpOnly cookies.
+
+**Alternatives considered:**
+- Session cookies: Requires server-side session store
+- OAuth2: Overkill for internal API
+
+**Related:**
+- See jwt-refresh.md for token lifecycle
+```
+
+You can read these files directly:
+
+```bash
+cat ~/work/my-app/.lerim/memory/decisions/auth-bearer-tokens.md
+```
+
+## Filtering memories
+
+Memories are organized by type:
+
+```
+.lerim/memory/
+├── decisions/        # Choices made
+├── learnings/        # Insights gained
+└── archived/         # Stale or low-value entries
+```
+
+Search specific folders:
+
+```bash
+rg "auth" ~/work/my-app/.lerim/memory/decisions/
+rg "performance" ~/work/my-app/.lerim/memory/learnings/
+```
+
+## Checking memory status
+
+See how many memories Lerim has extracted:
+
+```bash
+lerim status
+```
+
+Output:
+
+```
+Lerim status:
+- connected_agents: 3
+- memory_count: 47
+- sessions_indexed_count: 152
+- queue: {"pending": 2, "processing": 0}
+```
+
+## Advanced queries
+
+### Grep with ripgrep flags
+
+```bash
+rg --ignore-case --context 3 "postgres" ~/.lerim/memory/
+```
+
+### Search by tag
+
+Memories include tags in frontmatter:
+
+```bash
+rg "^tags:.*testing" ~/.lerim/memory/
+```
+
+### Search by confidence
+
+```bash
+rg "^confidence: 0\.[89]" ~/.lerim/memory/
+```
+
+### Search by date
+
+```bash
+rg "^created: 2026-02" ~/.lerim/memory/
+```
+
+## Troubleshooting
+
+<Accordion title="No matching memories">
+  Lerim hasn't extracted memories matching your query.
+
+  **Solutions:**
+  - Force a sync: `lerim sync --force`
+  - Check connected platforms: `lerim connect list`
+  - Verify agent sessions exist in their session stores
+  - Broaden your search terms
+</Accordion>
+
+<Accordion title="lerim ask fails">
+  The Lerim server isn't running.
+
+  **Solution:** Start the server:
+  ```bash
+  lerim up        # Docker
+  lerim serve     # Native
+  ```
+
+  Verify it's running:
+  ```bash
+  lerim status
+  ```
+</Accordion>
+
+<Accordion title="Agent doesn't query memories">
+  The Lerim skill might not be installed or the agent doesn't know to use it.
+
+  **Solutions:**
+  - Install the skill: `npx skills add lerim-dev/lerim-cli`
+  - Explicitly prompt: "Check lerim for relevant memories"
+  - Verify Lerim is running: `lerim status`
+</Accordion>
+
+<Accordion title="Old memories persist">
+  Stale memories aren't automatically deleted.
+
+  **Solution:** Run maintenance to archive low-value entries:
+  ```bash
+  lerim maintain
+  ```
+
+  Or manually delete:
+  ```bash
+  rm ~/work/my-app/.lerim/memory/decisions/old-decision.md
+  ```
+</Accordion>
+
+## Next steps
+
+- Explore memories in the [dashboard UI](/guides/dashboard)
+- Learn about [Docker workflow](/guides/docker-workflow) for always-on syncing
+- Read the [CLI reference](/cli/overview) for all query options

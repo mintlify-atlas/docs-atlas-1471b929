@@ -1,0 +1,552 @@
+---
+title: Model roles
+description: Configure LLM models for different tasks in Lerim
+---
+
+Lerim uses a role-based model system that lets you assign different LLM models to different tasks. This gives you fine-grained control over cost, performance, and quality across the pipeline.
+
+## Why roles matter
+
+Different parts of Lerim's pipeline have different requirements:
+
+- **Orchestration** (lead, explorer) needs strong reasoning and tool use
+- **Extraction** needs large context windows to process long transcripts
+- **Summarization** benefits from fast, cost-effective models
+
+By separating these concerns into roles, you can:
+
+- Use expensive, powerful models only where they add value
+- Use cheaper models for high-volume tasks like extraction
+- Switch providers per-role (OpenRouter for orchestration, OpenAI for extraction)
+- Test new models in one role without affecting others
+
+## The four roles
+
+Lerim uses four model roles, each independently configurable:
+
+| Role | Purpose | Config section |
+|------|---------|----------------|
+| **lead** | Orchestrates chat, sync, maintain flows (PydanticAI agent) | `[roles.lead]` |
+| **explorer** | Read-only subagent for candidate gathering | `[roles.explorer]` |
+| **extract** | DSPy extraction pipeline (decisions and learnings) | `[roles.extract]` |
+| **summarize** | DSPy summarization pipeline (session summaries) | `[roles.summarize]` |
+
+### Lead
+
+The **lead** agent orchestrates Lerim's main workflows:
+
+- `lerim ask` — Answers questions about memories
+- `lerim sync` — Decides which extracted candidates become memories
+- `lerim maintain` — Merges duplicates, archives stale entries
+
+The lead agent needs:
+- Strong reasoning and decision-making capabilities
+- Reliable tool calling (PydanticAI tools)
+- Fast response time for interactive use
+
+**Default model:** `x-ai/grok-4.1-fast` via OpenRouter
+
+### Explorer
+
+The **explorer** is a read-only subagent that the lead delegates to during sync and maintain:
+
+- Searches existing memories for duplicates
+- Gathers context for merge decisions
+- Explores related memories
+
+The explorer needs:
+- Fast inference for repeated calls
+- Good search and comparison abilities
+- No write access (read-only by design)
+
+**Default model:** `x-ai/grok-4.1-fast` via OpenRouter
+
+<Info>
+The explorer is called multiple times per sync run, so using a fast model here improves sync performance.
+</Info>
+
+### Extract
+
+The **extract** role runs DSPy pipelines to identify decisions and learnings in session transcripts:
+
+- Scans agent transcripts for decision points
+- Identifies learnings and patterns
+- Outputs structured candidates for the lead agent
+
+The extract role needs:
+- Large context window (`max_window_tokens` ≥ 100K recommended)
+- Strong information extraction capabilities
+- Cost efficiency (processes many sessions)
+
+**Default model:** `openai/gpt-5-nano` via OpenRouter (300K token window)
+
+<Warning>
+The `max_window_tokens` setting directly affects extraction quality. If your coding sessions are long, increase this value or use a model with a larger context window.
+</Warning>
+
+### Summarize
+
+The **summarize** role creates concise summaries of agent sessions:
+
+- Generates session titles and descriptions
+- Summarizes key topics and outcomes
+- Feeds metadata to the dashboard
+
+The summarize role needs:
+- Fast inference (many sessions to summarize)
+- Good compression and summarization skills
+- Cost efficiency
+
+**Default model:** `openai/gpt-5-nano` via OpenRouter (300K token window)
+
+## Default configuration
+
+Out of the box, Lerim uses these defaults:
+
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+timeout_seconds = 300
+max_iterations = 10
+
+[roles.explorer]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+timeout_seconds = 180
+max_iterations = 8
+
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+timeout_seconds = 180
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+
+[roles.summarize]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+timeout_seconds = 180
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+```
+
+<Note>
+These defaults use OpenRouter to route to xAI Grok for orchestration and OpenAI GPT-5 Nano for extraction/summarization. You need an OpenRouter API key: `export OPENROUTER_API_KEY="sk-or-..."`
+</Note>
+
+## Supported providers
+
+Lerim supports multiple LLM providers through PydanticAI and DSPy:
+
+| Provider | Config value | API key variable | Best for |
+|----------|--------------|------------------|----------|
+| **OpenRouter** | `openrouter` | `OPENROUTER_API_KEY` | Access to many models via one API |
+| **OpenAI** | `openai` | `OPENAI_API_KEY` | GPT-4o, GPT-4 Turbo, GPT-5 models |
+| **ZAI** | `zai` | `ZAI_API_KEY` | ZAI platform models |
+| **Anthropic** | `anthropic` | `ANTHROPIC_API_KEY` | Claude models (via PydanticAI) |
+| **Ollama** | `ollama` | none (local) | Local models (Qwen, Llama, etc.) |
+
+### Setting API keys
+
+API keys are environment variables only, never in config files:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+export OPENAI_API_KEY="sk-..."
+export ZAI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+```
+
+Or add them to a `.env` file in your project root — Lerim loads it automatically.
+
+## Customizing models
+
+### Switching providers
+
+To use OpenAI instead of OpenRouter for all roles:
+
+```toml
+# ~/.lerim/config.toml
+[roles.lead]
+provider = "openai"
+model = "gpt-4o"
+
+[roles.explorer]
+provider = "openai"
+model = "gpt-4o"
+
+[roles.extract]
+provider = "openai"
+model = "gpt-4o"
+
+[roles.summarize]
+provider = "openai"
+model = "gpt-4o"
+```
+
+You need: `export OPENAI_API_KEY="sk-..."`
+
+### Using different models per role
+
+You can mix providers and models:
+
+```toml
+# Use OpenAI GPT-4o for orchestration
+[roles.lead]
+provider = "openai"
+model = "gpt-4o"
+
+[roles.explorer]
+provider = "openai"
+model = "gpt-4o-mini"
+
+# Use Qwen via OpenRouter for extraction (cheaper)
+[roles.extract]
+provider = "openrouter"
+model = "qwen/qwen3-coder-30b-a3b-instruct"
+max_window_tokens = 500000
+
+[roles.summarize]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+```
+
+This setup:
+- Uses GPT-4o for the lead agent (best reasoning)
+- Uses GPT-4o Mini for explorer (cheaper, still good)
+- Uses Qwen for extraction (great code understanding, large context)
+- Uses GPT-5 Nano for summarization (fast and cheap)
+
+<Accordion title="Why different models per role?">
+Model selection is about matching capabilities to requirements:
+
+**Lead agent** — Needs strong reasoning to make good memory decisions. Bad decisions = bad memory store. Worth the cost.
+
+**Explorer** — Called repeatedly, but tasks are simpler (search, compare). A faster/cheaper model can save money without hurting quality.
+
+**Extract** — Processes many sessions. Context window size matters more than reasoning. A cheaper model with a large window is often better than an expensive model with a small window.
+
+**Summarize** — High volume, simple task (compression). Use the cheapest model that produces readable summaries.
+</Accordion>
+
+### Using local models via Ollama
+
+You can run Lerim entirely on local models using Ollama:
+
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+
+[roles.explorer]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+
+[roles.extract]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+max_window_tokens = 32000
+
+[roles.summarize]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+```
+
+<Note>
+Ollama models typically have smaller context windows. Adjust `max_window_tokens` to match your model's limit (e.g., 32K for Qwen3:8b).
+</Note>
+
+Pull the model first:
+
+```bash
+ollama pull qwen3:8b
+```
+
+### Custom API endpoints
+
+You can point roles at custom endpoints:
+
+```toml
+[roles.lead]
+provider = "openai"
+model = "gpt-4o"
+api_base = "https://my-proxy.example.com/v1"
+```
+
+This works for:
+- LLM proxy services
+- Internal corporate endpoints
+- Custom OpenAI-compatible APIs
+
+## Model-specific settings
+
+### Orchestration roles (lead, explorer)
+
+These settings apply to `[roles.lead]` and `[roles.explorer]`:
+
+<ParamField path="timeout_seconds" type="integer">
+  Request timeout in seconds. Increase for slower models or complex tasks.
+</ParamField>
+
+<ParamField path="max_iterations" type="integer">
+  Maximum agent iterations per run. The agent can call tools and reason in multiple steps. Increase for complex workflows.
+</ParamField>
+
+<ParamField path="fallback_models" type="array">
+  List of fallback models to try if the primary model fails. Example: `["x-ai/grok-4.1-fast", "openai/gpt-4o"]`
+</ParamField>
+
+<ParamField path="openrouter_provider_order" type="array">
+  OpenRouter provider routing preference. Example: `["Together", "Lepton"]` tries Together first, then Lepton.
+</ParamField>
+
+**Example:**
+
+```toml
+[roles.lead]
+provider = "openai"
+model = "gpt-4o"
+timeout_seconds = 300
+max_iterations = 10
+fallback_models = ["gpt-4-turbo"]
+```
+
+### DSPy roles (extract, summarize)
+
+These settings apply to `[roles.extract]` and `[roles.summarize]`:
+
+<ParamField path="max_window_tokens" type="integer">
+  Maximum tokens per transcript window. Lerim splits long transcripts into overlapping windows. Increase for large-context models.
+</ParamField>
+
+<ParamField path="window_overlap_tokens" type="integer">
+  Token overlap between consecutive windows. Ensures context continuity at window boundaries.
+</ParamField>
+
+<ParamField path="timeout_seconds" type="integer">
+  Request timeout in seconds.
+</ParamField>
+
+<ParamField path="openrouter_provider_order" type="array">
+  OpenRouter provider routing preference.
+</ParamField>
+
+**Example:**
+
+```toml
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+timeout_seconds = 180
+```
+
+### Understanding max_window_tokens
+
+The `max_window_tokens` setting is critical for extraction quality:
+
+- **Too small:** Long sessions get truncated, losing context
+- **Too large:** Model exceeds context limit and fails
+- **Just right:** Full context with room for prompts and outputs
+
+Rule of thumb:
+```
+max_window_tokens = model_context_limit * 0.8
+```
+
+Leave 20% headroom for prompts, system messages, and outputs.
+
+**Common model context limits:**
+
+| Model | Context | Recommended max_window_tokens |
+|-------|---------|-------------------------------|
+| GPT-5 Nano | 320K | 300K |
+| GPT-4o | 128K | 100K |
+| Grok 4.1 | 131K | 100K |
+| Claude 4.5 Sonnet | 200K | 180K |
+| Qwen3 Coder | 131K | 100K |
+| Llama 3.3 | 128K | 100K |
+
+<Warning>
+If you see extraction failures or truncated memories, the model's context window is probably too small. Either increase `max_window_tokens` (if the model supports it) or switch to a larger-context model.
+</Warning>
+
+## Recommended configurations
+
+### Budget-conscious
+
+Use cheaper models where possible:
+
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "qwen/qwen3-coder-30b-a3b-instruct"
+
+[roles.explorer]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+max_window_tokens = 300000
+
+[roles.summarize]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+max_window_tokens = 300000
+```
+
+### Performance-focused
+
+Use the best models everywhere:
+
+```toml
+[roles.lead]
+provider = "openai"
+model = "gpt-4o"
+
+[roles.explorer]
+provider = "openai"
+model = "gpt-4o"
+
+[roles.extract]
+provider = "anthropic"
+model = "claude-4.5-sonnet-20250514"
+max_window_tokens = 180000
+
+[roles.summarize]
+provider = "openai"
+model = "gpt-4o"
+```
+
+### Fully local (Ollama)
+
+No API keys, no cloud, all local:
+
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+
+[roles.explorer]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+
+[roles.extract]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+max_window_tokens = 32000
+
+[roles.summarize]
+provider = "openrouter"
+model = "ollama_chat/qwen3:8b"
+api_base = "http://localhost:11434/v1"
+max_window_tokens = 32000
+```
+
+Requires:
+```bash
+ollama pull qwen3:8b
+```
+
+## Testing model changes
+
+You can test model changes without affecting your main config:
+
+```bash
+# Create a test config
+cat > /tmp/test-config.toml <<EOF
+[roles.lead]
+provider = "openai"
+model = "gpt-4o-mini"
+EOF
+
+# Run with test config
+LERIM_CONFIG=/tmp/test-config.toml lerim ask "test question"
+```
+
+Or use project-specific config:
+
+```toml
+# my-project/.lerim/config.toml
+[roles.lead]
+model = "anthropic/claude-4.5-sonnet"
+```
+
+Now `lerim sync` in `my-project/` uses Claude, while other projects use your global default.
+
+## Troubleshooting
+
+### Model not found
+
+```
+Error: Model 'gpt-5-nano' not found
+```
+
+**Cause:** Wrong model identifier for the provider.
+
+**Fix:** Check the provider's model list:
+- OpenRouter: https://openrouter.ai/models
+- OpenAI: https://platform.openai.com/docs/models
+- Use the exact model identifier from the provider docs
+
+### Context length exceeded
+
+```
+Error: Token limit exceeded (150000 > 128000)
+```
+
+**Cause:** `max_window_tokens` is larger than the model's context limit.
+
+**Fix:** Reduce `max_window_tokens` or switch to a larger-context model:
+
+```toml
+[roles.extract]
+max_window_tokens = 100000  # Reduce from 300K
+```
+
+### Slow extraction
+
+**Cause:** Using a slow model for high-volume extraction.
+
+**Fix:** Switch to a faster model for `[roles.extract]`:
+
+```toml
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"  # Fast and cheap
+```
+
+### API rate limits
+
+**Cause:** Too many requests to the provider.
+
+**Fix:** Reduce sync frequency or use a different provider:
+
+```toml
+[server]
+sync_interval_minutes = 30  # Less frequent sync
+```
+
+Or switch to a provider with higher rate limits (e.g., OpenRouter).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Config.toml reference" icon="file-code" href="/configuration/config-toml">
+    See all available role configuration options
+  </Card>
+  <Card title="Tracing" icon="chart-line" href="/configuration/tracing">
+    Monitor model usage with OpenTelemetry tracing
+  </Card>
+</CardGroup>

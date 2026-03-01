@@ -1,0 +1,397 @@
+---
+title: lerim connect
+description: Manage agent platform connections for session ingestion
+---
+
+The `lerim connect` command registers agent platforms so Lerim knows where to find their session data. This is how Lerim discovers coding agent transcripts to extract memories from.
+
+<Note>
+This is a **host-only** command - it runs locally and does not require a Lerim server.
+</Note>
+
+## Syntax
+
+```bash
+lerim connect list                          # Show all connected platforms
+lerim connect auto                          # Auto-detect and connect all known platforms
+lerim connect <platform>                    # Connect a specific platform
+lerim connect <platform> --path <path>      # Connect with custom session store path
+lerim connect remove <platform>             # Disconnect a platform
+```
+
+## Supported platforms
+
+Lerim supports these coding agent platforms:
+
+| Platform | Session Store | Format |
+|----------|--------------|--------|
+| `claude` | `~/.claude/projects/` | JSONL files |
+| `codex` | `~/.codex/sessions/` | JSONL files |
+| `cursor` | `~/Library/Application Support/Cursor/User/globalStorage/` (macOS) | SQLite `state.vscdb`, exported to JSONL cache |
+| `opencode` | `~/.local/share/opencode/` | SQLite `opencode.db`, exported to JSONL cache |
+
+## Commands
+
+### lerim connect list
+
+Show all currently connected platforms with their paths, session counts, and status.
+
+#### Syntax
+
+```bash
+lerim connect list
+lerim connect        # same as list
+```
+
+#### Examples
+
+```bash
+$ lerim connect list
+
+Connected platforms: 3
+- claude: /Users/you/.claude/projects (12 sessions, ok)
+- cursor: /Users/you/Library/Application Support/Cursor/User/globalStorage (8 sessions, ok)
+- codex: /Users/you/.codex/sessions (0 sessions, missing)
+```
+
+**Status indicators:**
+- `ok` - Path exists and is accessible
+- `missing` - Path doesn't exist or isn't readable
+
+If no platforms are connected:
+
+```bash
+$ lerim connect list
+
+No platforms connected.
+```
+
+### lerim connect auto
+
+Auto-detect and connect all supported platforms by checking their default paths.
+
+#### Syntax
+
+```bash
+lerim connect auto
+```
+
+#### What it does
+
+1. Checks default paths for each supported platform:
+   - Claude: `~/.claude/projects`
+   - Codex: `~/.codex/sessions`
+   - Cursor: `~/Library/Application Support/Cursor/User/globalStorage`
+   - OpenCode: `~/.local/share/opencode`
+
+2. Connects platforms where the path exists
+3. Skips platforms where the path is missing
+4. Updates `~/.lerim/config.toml` with detected platforms
+
+#### Examples
+
+```bash
+$ lerim connect auto
+
+Auto connected: 2
+```
+
+This is equivalent to running:
+
+```bash
+lerim connect claude    # if ~/.claude/projects exists
+lerim connect cursor    # if ~/Library/.../Cursor exists
+# ... for each detected platform
+```
+
+<Tip>
+Run `lerim connect auto` as part of your initial setup - it's the fastest way to connect all your coding agents.
+</Tip>
+
+### lerim connect &lt;platform&gt;
+
+Connect a specific agent platform. Uses the default session store path unless `--path` is provided.
+
+#### Syntax
+
+```bash
+lerim connect <platform>
+lerim connect <platform> --path <custom_path>
+```
+
+#### Parameters
+
+<ParamField path="platform" type="string" required>
+  Platform name: `claude`, `codex`, `cursor`, or `opencode`.
+
+  ```bash
+  lerim connect claude
+  lerim connect cursor
+  ```
+</ParamField>
+
+<ParamField path="--path" type="string">
+  Custom filesystem path to the platform's session store. Overrides the auto-detected default path.
+
+  Use this when:
+  - Your agent stores sessions in a non-standard location
+  - You have multiple agent installations
+  - You're syncing from a backup or external drive
+
+  ```bash
+  lerim connect claude --path /custom/claude/sessions
+  lerim connect cursor --path ~/backup/cursor-data/globalStorage
+  ```
+
+  The path is expanded (`~` is resolved) and must exist on disk.
+</ParamField>
+
+#### Examples
+
+**Connect with default path:**
+
+```bash
+$ lerim connect claude
+
+Connected: claude
+- Path: /Users/you/.claude/projects
+- Sessions: 12
+```
+
+**Connect with custom path:**
+
+```bash
+$ lerim connect claude --path /Volumes/External/claude-sessions
+
+Connected: claude
+- Path: /Volumes/External/claude-sessions
+- Sessions: 8
+```
+
+**Reconnect to update path:**
+
+```bash
+# Already connected to default path
+lerim connect cursor
+
+# Reconnect with custom path
+lerim connect cursor --path ~/backup/cursor-data/globalStorage
+
+Connected: cursor
+- Path: /Users/you/backup/cursor-data/globalStorage
+- Sessions: 15
+- Path unchanged, no initial reindex trigger.
+```
+
+<Note>
+If you reconnect a platform with the same path, Lerim detects this and skips reindexing. If the path changes, sessions are re-scanned on the next sync.
+</Note>
+
+### lerim connect remove
+
+Disconnect a platform. Removes the platform from `~/.lerim/config.toml` but does not delete any session data or memories.
+
+#### Syntax
+
+```bash
+lerim connect remove <platform>
+```
+
+#### Parameters
+
+<ParamField path="platform" type="string" required>
+  Platform name to disconnect: `claude`, `codex`, `cursor`, or `opencode`.
+
+  ```bash
+  lerim connect remove claude
+  ```
+</ParamField>
+
+#### What it does
+
+1. Removes the platform from `~/.lerim/config.toml`
+2. Stops scanning that platform's sessions during future syncs
+3. **Preserves** existing memories extracted from that platform
+4. **Preserves** the platform's session store (nothing is deleted from `~/.claude/projects`, etc.)
+
+#### Examples
+
+```bash
+$ lerim connect remove codex
+
+Removed: codex
+```
+
+If the platform wasn't connected:
+
+```bash
+$ lerim connect remove codex
+
+Platform not connected: codex
+```
+
+<Warning>
+Removing a platform stops future syncs of its sessions, but existing memories are kept. If you want to remove memories too, use `lerim memory reset` after disconnecting.
+</Warning>
+
+## Configuration
+
+Connected platforms are stored in `~/.lerim/config.toml`:
+
+```toml
+[agents.claude]
+path = "/Users/you/.claude/projects"
+
+[agents.cursor]
+path = "/Users/you/Library/Application Support/Cursor/User/globalStorage"
+
+[agents.codex]
+path = "/Users/you/.codex/sessions"
+```
+
+You can edit this manually, but using the CLI ensures paths are validated.
+
+## Examples
+
+### Initial setup
+
+```bash
+# After lerim init
+lerim connect auto              # Connect all detected platforms
+lerim connect list              # Verify connections
+lerim sync --window all         # Initial sync
+```
+
+### Connect specific platforms
+
+```bash
+# Only connect Claude and Cursor
+lerim connect claude
+lerim connect cursor
+
+# Skip Codex and OpenCode
+```
+
+### Custom paths
+
+```bash
+# Work laptop setup
+lerim connect claude --path ~/.claude/projects
+
+# External backup drive
+lerim connect claude --path /Volumes/Backup/claude-sessions
+
+# Network mount
+lerim connect cursor --path /mnt/shared/cursor-data
+```
+
+### Sync from backup
+
+```bash
+# Connect to backup directory
+lerim connect claude --path ~/backup-2026-02/claude-projects
+
+# Sync historical sessions
+lerim sync --window all --max-sessions 100
+
+# Reconnect to live path
+lerim connect claude --path ~/.claude/projects
+```
+
+### Remove unused platforms
+
+```bash
+# Check what's connected
+lerim connect list
+
+# Remove platforms you don't use
+lerim connect remove codex
+lerim connect remove opencode
+```
+
+## How sessions are discovered
+
+After connecting a platform, Lerim scans its session store during `lerim sync`:
+
+1. **JSONL platforms** (Claude, Codex) - Lerim reads `.jsonl` files directly
+2. **SQLite platforms** (Cursor, OpenCode) - Lerim exports SQLite data to JSONL cache, then reads the cache
+
+Sessions are indexed by their `run_id` (unique session identifier). Already-processed sessions are skipped unless you use `--force`.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success (connected, listed, or removed) |
+| `1` | Path not found or platform unknown |
+| `2` | Usage error (missing platform name) |
+
+## Related commands
+
+- [`lerim init`](/cli/init) - Initial setup (detects agents automatically)
+- [`lerim sync`](/cli/sync) - Sync sessions from connected platforms
+- `lerim status` - See which platforms have indexed sessions
+- [`lerim project add`](/cli/project) - Register projects to track
+
+## Troubleshooting
+
+### "Path not found"
+
+The session store path doesn't exist. Check:
+
+1. Is the agent installed?
+2. Have you used it at least once (to create the session directory)?
+3. Is the path correct for your OS?
+
+**Fix:** Use `--path` to specify the correct location:
+
+```bash
+lerim connect claude --path /actual/path/to/sessions
+```
+
+### "Unknown platform"
+
+You tried to connect a platform Lerim doesn't support yet. Supported platforms:
+- `claude`
+- `codex`
+- `cursor`
+- `opencode`
+
+**Contributing:** Want to add support for a new agent? See [`src/lerim/adapters/`](https://github.com/lerim-dev/lerim-cli/tree/main/src/lerim/adapters) for examples and submit a PR!
+
+### Sessions not syncing
+
+If sessions aren't being indexed:
+
+1. Verify the platform is connected:
+   ```bash
+   lerim connect list
+   ```
+
+2. Check the path status:
+   ```bash
+   lerim connect list    # Look for "ok" or "missing"
+   ```
+
+3. Run sync with verbose output:
+   ```bash
+   lerim sync --dry-run    # Preview without writing
+   lerim logs -f           # Watch Docker logs
+   ```
+
+4. Check session format:
+   ```bash
+   ls ~/.claude/projects   # Should contain .jsonl files
+   ```
+
+### Platform path changed
+
+If your agent moved its session store:
+
+```bash
+# Reconnect with new path
+lerim connect claude --path /new/path/to/sessions
+
+# Re-sync
+lerim sync --window all
+```

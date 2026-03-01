@@ -1,80 +1,320 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get Lerim running in under 5 minutes — from installation to your first memory query
 ---
 
-## Get started in three steps
+This guide will take you from zero to querying your first agent memories in under 5 minutes.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, make sure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- Python 3.10 or higher
+- [Docker](https://docs.docker.com/get-docker/) installed (recommended)
+- An LLM API key (OpenRouter, OpenAI, or Anthropic)
 
-### Step 2: Deploy your changes
+<Tip>
+If you don't have Docker, you can run Lerim directly using `lerim serve` instead of `lerim up`. See the [installation guide](/installation#running-without-docker) for details.
+</Tip>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Get started in 5 steps
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Steps>
+  <Step title="Install Lerim">
+    Install Lerim via pip:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    pip install lerim
+    ```
 
-### Step 3: Go live
+    Verify the installation:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash
+    lerim --version
+    ```
+
+    You should see output like:
+
+    ```
+    lerim, version 0.1.52
+    ```
+  </Step>
+
+  <Step title="Set up API keys">
+    Lerim needs an LLM provider for extraction and querying. Set at least one API key:
+
+    <CodeGroup>
+
+    ```bash OpenRouter (recommended)
+    export OPENROUTER_API_KEY="sk-or-v1-..."
+    ```
+
+    ```bash OpenAI
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+    ```bash ZAI
+    export ZAI_API_KEY="..."
+    ```
+
+    </CodeGroup>
+
+    <Note>
+    OpenRouter is the default provider. It gives you access to multiple models including GPT-5-nano (used for extraction) and Grok-4.1-fast (used for agents).
+    </Note>
+  </Step>
+
+  <Step title="Initialize and add a project">
+    Run the interactive setup wizard:
+
+    ```bash
+    lerim init
+    ```
+
+    This will:
+    - Detect your installed coding agents (Claude Code, Codex, Cursor, OpenCode)
+    - Ask which agents you want to connect
+    - Write the config to `~/.lerim/config.toml`
+    - Check for Docker availability
+
+    Example session:
+
+    ```
+    Welcome to Lerim.
+
+    Which coding agents do you use?
+      claude (detected) [Y/n]: y
+      cursor (detected) [Y/n]: y
+      codex (not found) [y/N]: n
+      opencode (not found) [y/N]: n
+
+    Config written to ~/.lerim/config.toml
+    Agents: claude, cursor
+
+    Docker: found
+
+    Next steps:
+      lerim project add /path/to/repo   # register a project
+      lerim up                           # start the Docker service
+    ```
+
+    Now add your first project:
+
+    ```bash
+    lerim project add .
+    ```
+
+    This registers the current directory and creates a `.lerim/` folder for project-specific memories.
+
+    <Tip>
+    You can add multiple projects. Each project gets its own `.lerim/` directory for scoped memories.
+    </Tip>
+  </Step>
+
+  <Step title="Start the Lerim service">
+    Start Lerim as a Docker service:
+
+    ```bash
+    lerim up
+    ```
+
+    Output:
+
+    ```
+    Starting Lerim with 1 projects and 2 agents...
+    Lerim is running at http://localhost:8765
+    ```
+
+    This starts a Docker container that:
+    - Runs the sync + maintain daemon loop
+    - Serves the dashboard at `http://localhost:8765`
+    - Exposes the HTTP API for CLI commands
+
+    <Note>
+    The first time you run `lerim up`, it will pull the Docker image from the registry. This may take a minute.
+    </Note>
+
+    Open the dashboard in your browser:
+
+    ```bash
+    open http://localhost:8765
+    ```
+  </Step>
+
+  <Step title="Query your memories">
+    Now you can query your agent memories. Try these commands:
+
+    <CodeGroup>
+
+    ```bash Ask a question
+    lerim ask "Why did we choose this architecture?"
+    ```
+
+    ```bash Search memories
+    lerim memory search "database migration"
+    ```
+
+    ```bash List all memories
+    lerim memory list
+    ```
+
+    ```bash Check status
+    lerim status
+    ```
+
+    </CodeGroup>
+
+    Example output from `lerim status`:
+
+    ```
+    Lerim status:
+    - connected_agents: 2
+    - memory_count: 0
+    - sessions_indexed_count: 0
+    - queue: {'pending': 0, 'processing': 0, 'failed': 0}
+    ```
+
+    <Tip>
+    If you don't have any memories yet, use your coding agents as usual. Lerim will automatically sync sessions in the background and extract decisions and learnings.
+    </Tip>
+  </Step>
+</Steps>
+
+## Teach your agent about Lerim
+
+Install the Lerim skill so your coding agent knows how to query past context:
+
+```bash
+npx skills add lerim-dev/lerim-cli
+```
+
+This works with Claude Code, Codex, Cursor, Copilot, Cline, Windsurf, OpenCode, and [other agents that support skills](https://skills-ai.dev).
+
+At the start of a coding session, tell your agent:
+
+> Check lerim for any relevant memories about [topic you're working on].
+
+Your agent will run `lerim ask` or `lerim memory search` to pull in past decisions and learnings before it starts working.
+
+## Force a sync
+
+By default, Lerim syncs sessions automatically in the background. To trigger a manual sync:
+
+```bash
+lerim sync
+```
+
+Example output:
+
+```
+Sync:
+- sessions_processed: 3
+- new_memories: 5
+- updated_memories: 1
+- duration_seconds: 12.4
+```
+
+You can limit the number of sessions to sync:
+
+```bash
+lerim sync --max-sessions 5
+```
+
+Or sync only a specific agent:
+
+```bash
+lerim sync --agent claude
+```
+
+## Run memory maintenance
+
+Lerim automatically maintains memories in the background, but you can trigger it manually:
+
+```bash
+lerim maintain
+```
+
+This will:
+- Merge duplicate memories
+- Archive low-value entries
+- Consolidate related memories
+- Apply time-based decay
+
+Example output:
+
+```
+Maintain:
+- memories_merged: 2
+- memories_archived: 1
+- duration_seconds: 8.2
+```
+
+## Managing the service
+
+<CodeGroup>
+
+```bash Stop the service
+lerim down
+```
+
+```bash Restart
+lerim down && lerim up
+```
+
+```bash View logs
+lerim logs
+```
+
+```bash Tail logs
+lerim logs --follow
+```
+
+```bash List projects
+lerim project list
+```
+
+```bash Add another project
+lerim project add ~/work/my-app
+```
+
+</CodeGroup>
+
+## Running without Docker
+
+If you prefer not to use Docker, run Lerim directly:
+
+```bash
+lerim connect auto           # detect agent platforms
+lerim serve                  # start API server + dashboard + daemon loop
+```
+
+Then use `lerim ask`, `lerim sync`, `lerim status`, etc. as usual.
+
+## What's happening in the background?
+
+1. **Session indexing**: Lerim watches your agent session stores (e.g., `~/.claude/projects/`, `~/Library/Application Support/Cursor/User/globalStorage/`)
+2. **Extraction**: When new sessions are detected, Lerim extracts decision and learning candidates using DSPy pipelines
+3. **Deduplication**: Candidates are compared against existing memories to avoid duplicates
+4. **Storage**: New memories are written as markdown files to `.lerim/memory/` (project scope) or `~/.lerim/memory/` (global scope)
+5. **Refinement**: The maintain loop periodically merges duplicates, archives low-value entries, and applies time decay
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="CLI reference" icon="terminal" href="/cli-reference">
+    Master all Lerim commands
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Customize model providers, tracing, and more
+  </Card>
+  <Card title="Memory model" icon="brain" href="/memory-model">
+    Understand how memories are stored and structured
+  </Card>
+  <Card title="Dashboard" icon="chart-line" href="/dashboard">
+    Explore the web UI features
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+Having issues? Check the [troubleshooting guide](/installation#troubleshooting) or [open an issue on GitHub](https://github.com/lerim-dev/lerim-cli/issues).
 </Note>

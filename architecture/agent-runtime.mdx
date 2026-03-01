@@ -1,0 +1,447 @@
+---
+title: Agent runtime
+description: PydanticAI lead agent orchestration with read-only explorer subagent and boundary-enforced runtime tools
+---
+
+Lerim's agent runtime orchestrates all memory operations through a PydanticAI lead agent with strict write boundaries and read-only subagent delegation.
+
+## Runtime architecture
+
+The runtime is implemented in `src/lerim/runtime/agent.py` as the `LerimAgent` class:
+
+```python
+# src/lerim/runtime/agent.py:166-201
+class LerimAgent:
+    """Lead runtime wrapper for chat, sync, and maintain orchestration."""
+
+    def __init__(
+        self,
+        model: str | None = None,
+        provider: str | None = None,
+        timeout_seconds: int | None = None,
+        single_tools: list[str] | None = None,
+        allowed_read_dirs: list[str | Path] | None = None,
+        default_cwd: str | None = None,
+    ) -> None:
+        """Create runtime with role-based model wiring and tool policy defaults."""
+        config = get_config()
+        lead_role = config.lead_role
+        # ... role configuration ...
+        self.model = build_orchestration_model_from_role(role, config=config)
+        self.system_prompt = build_lead_system_prompt()
+```
+
+The lead agent operates in three modes:
+
+- **ask** — Query memories (read-only)
+- **sync** — Process session trace and write memories
+- **maintain** — Refine existing memories (merge, archive, consolidate)
+
+## PydanticAI lead agent
+
+### Tool registration
+
+The lead agent registers tools dynamically based on the current mode:
+
+```python
+# src/lerim/runtime/agent.py:216-242
+def _build_lead_agent(self, mode: str) -> Agent[RuntimeToolContext, str]:
+    """Build one lead PydanticAI agent with mode-specific tool registration."""
+    mode_tools = {
+        "ask": CHAT_TOOLS,        # ["read", "grep", "glob", "explore"]
+        "sync": SYNC_TOOLS,       # ask tools + "write", "write_memory", "extract_pipeline", "summarize_pipeline"
+        "maintain": MAINTAIN_TOOLS,  # ask tools + "write", "write_memory", "edit"
+    }
+    allowed_tools = set(
+        self.single_tools if mode == "ask" else mode_tools.get(mode, CHAT_TOOLS)
+    )
+
+    agent = Agent[
+        RuntimeToolContext,
+        str,
+    ](
+        model=self.model,
+        output_type=str,
+        deps_type=RuntimeToolContext,
+        name=f"lerim-{mode}",
+        instructions=instructions,
+        retries=retries,
+        tool_timeout=float(self._timeout_seconds),
+    )
+```
+
+<Note>
+Mode-specific tool registration ensures that the `ask` mode cannot write memories and `maintain` has edit capabilities that `sync` doesn't need.
+</Note>
+
+### Runtime tool definitions
+
+Key tools available to the lead agent:
+
+#### read
+
+Read file contents with line numbers and boundary enforcement:
+
+```python
+# src/lerim/runtime/agent.py:244-259
+@agent.tool
+def read(
+    ctx: RunContext[RuntimeToolContext],
+    file_path: str,
+    offset: int = 1,
+    limit: int = 2000,
+) -> str:
+    """Read a file and return numbered lines. 
+    If file_path is a directory, list its entries instead. 
+    Use offset/limit to paginate large files."""
+    return read_file_tool(
+        context=ctx.deps,
+        file_path=file_path,
+        offset=offset,
+        limit=limit,
+    )
+```
+
+See `runtime/tools.py:184-216` for implementation with read boundary checks.
+
+#### write_memory
+
+Write structured memory records (Python builds frontmatter):
+
+```python
+# src/lerim/runtime/agent.py:326-346
+@agent.tool
+def write_memory(
+    ctx: RunContext[RuntimeToolContext],
+    primitive: str,
+    title: str,
+    body: str,
+    confidence: float = 0.8,
+    tags: list[str] | None = None,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    """Write a structured memory record. 
+    Python builds the markdown — pass fields directly. 
+    primitive must be 'decision' or 'learning'. 
+    kind is required for learnings (insight/procedure/friction/pitfall/preference)."""
+    return write_memory_tool(
+        context=ctx.deps,
+        primitive=primitive,
+        title=title,
+        body=body,
+        confidence=confidence,
+        tags=tags,
+        kind=kind,
+    )
+```
+
+<Info>
+The LLM never writes YAML frontmatter directly. It passes structured fields to `write_memory`, which builds the markdown file in Python. This prevents formatting errors and injection attacks.
+</Info>
+
+#### extract_pipeline and summarize_pipeline
+
+Delegate to DSPy pipelines for extraction and summarization:
+
+```python
+# src/lerim/runtime/agent.py:367-391
+@agent.tool
+def extract_pipeline(
+    ctx: RunContext[RuntimeToolContext],
+    guidance: str | None = None,
+) -> dict[str, Any]:
+    """Run DSPy extraction pipeline on the session trace. 
+    Paths and metadata are handled automatically. 
+    Pass optional guidance about focus areas or dedupe hints."""
+    return run_extract_pipeline_tool(
+        context=ctx.deps,
+        guidance=guidance,
+    )
+
+@agent.tool
+def summarize_pipeline(
+    ctx: RunContext[RuntimeToolContext],
+    guidance: str | None = None,
+) -> dict[str, Any]:
+    """Run DSPy summarization pipeline on the session trace. 
+    Paths and metadata are handled automatically. 
+    Pass optional guidance about focus areas."""
+    return run_summarization_pipeline_tool(
+        context=ctx.deps,
+        guidance=guidance,
+    )
+```
+
+See [Extraction pipeline](/architecture/extraction-pipeline) for DSPy implementation details.
+
+## Explorer subagent (read-only)
+
+The lead agent delegates evidence gathering to a read-only explorer subagent:
+
+```python
+# src/lerim/runtime/agent.py:293-308
+@agent.tool
+async def explore(
+    ctx: RunContext[RuntimeToolContext],
+    query: str,
+) -> dict[str, Any]:
+    """Delegate read-only evidence gathering to explorer subagent.
+
+    Async so PydanticAI can run multiple explore calls in parallel
+    when the LLM emits them in the same tool-call turn (max 4).
+    """
+    result = await get_explorer_agent().run(
+        query, deps=ctx.deps, usage=ctx.usage
+    )
+    return result.output.model_dump()
+```
+
+### Explorer implementation
+
+The explorer is a separate PydanticAI agent with only read tools:
+
+```python
+# src/lerim/runtime/subagents.py:21-44
+def _build_explorer(model=None) -> Agent[RuntimeToolContext, ExplorerEnvelope]:
+    """Build read-only explorer subagent with glob/read/grep tools."""
+    agent = Agent[RuntimeToolContext, ExplorerEnvelope](
+        model=model or build_orchestration_model("explorer"),
+        output_type=ExplorerEnvelope,
+        deps_type=RuntimeToolContext,
+        name="lerim-explorer",
+        instructions="""
+You are a read-only explorer for Lerim memories and workspace artifacts.
+
+Memory layout (base_path defaults to the memory root passed by the lead agent):
+- decisions/*.md — architecture/design decisions
+- learnings/*.md — insights, procedures, facts
+- summaries/YYYYMMDD/HHMMSS/*.md — session summaries
+
+Each .md file has YAML frontmatter (id, title, confidence, tags, kind, created) 
+then a markdown body.
+
+Search strategy:
+1. Use grep to find memories by keyword, title, or tag.
+2. Use glob to list files when you need to scan a directory.
+3. Use read to get the full content of specific files found by grep/glob.
+Return structured evidence with file paths.""",
+        retries=1,
+    )
+```
+
+Explorer tools (read-only):
+
+- `glob` — Find files by pattern
+- `read` — Read file contents
+- `grep` — Search file contents by regex
+
+<Accordion title="Why a separate explorer agent?">
+  <div>
+    The explorer subagent serves two purposes:
+
+    1. **Tool isolation**: The lead agent cannot accidentally call write operations during evidence gathering
+    2. **Parallel search**: PydanticAI runs multiple async `explore` calls in parallel when the LLM emits them in the same turn (up to 4 concurrent searches)
+
+    This design makes searches faster while maintaining strict boundaries.
+  </div>
+</Accordion>
+
+## Runtime tools boundary enforcement
+
+All write operations are guarded by boundary checks:
+
+### Write boundary
+
+```python
+# src/lerim/runtime/tools.py:132-149
+def _write_allowed_roots(context: RuntimeToolContext) -> tuple[Path, ...]:
+    """Return allowed write roots for write/edit tools."""
+    roots: list[Path] = []
+    if context.memory_root:
+        roots.append(context.memory_root)
+    if context.run_folder:
+        roots.append(context.run_folder)
+    return tuple(dict.fromkeys(roots))
+
+def _assert_write_boundary(path: Path, context: RuntimeToolContext) -> None:
+    """Raise when write target is outside memory/run-folder boundaries."""
+    roots = _write_allowed_roots(context)
+    if not roots or not any(_is_within(path, root) for root in roots):
+        raise RuntimeError(
+            f"Cannot write '{path}': outside allowed roots. "
+            f"Writable paths: {', '.join(str(r) for r in roots)}"
+        )
+```
+
+Write operations can only target:
+
+- **memory_root** — Project memory folder (e.g., `<repo>/.lerim/memory/`)
+- **run_folder** — Current workspace folder (e.g., `<repo>/.lerim/workspace/sync-20260301-143022-a3f9b1/`)
+
+### Memory primitive enforcement
+
+Attempts to use `write` for memory files are rejected:
+
+```python
+# src/lerim/runtime/tools.py:294-324
+def write_file_tool(
+    *,
+    context: RuntimeToolContext,
+    file_path: str,
+    content: str,
+) -> dict[str, Any]:
+    """Write file content under guarded roots. 
+    Memory primitives are rejected — use write_memory_tool instead."""
+    resolved = _resolve_path(file_path, _default_cwd(context))
+    _assert_write_boundary(resolved, context)
+    
+    primitive_type = _memory_primitive_type(resolved, context.memory_root)
+    if primitive_type is not None and primitive_type != MemoryType.summary:
+        raise ModelRetry(
+            "Use write_memory tool for memory files. "
+            "It accepts structured fields (primitive, title, body, confidence, tags, kind) "
+            "and builds the markdown automatically."
+        )
+    if primitive_type == MemoryType.summary:
+        raise ModelRetry(
+            "Cannot write summaries directly. Use summarize_pipeline tool."
+        )
+```
+
+<Note>
+Raising `ModelRetry` allows the LLM to self-correct by retrying with the correct tool. This is better than a hard error.
+</Note>
+
+### Read boundary
+
+Read operations check against allowed read roots:
+
+```python
+# src/lerim/runtime/tools.py:107-129
+def _read_allowed_roots(context: RuntimeToolContext) -> tuple[Path, ...]:
+    """Return allowed read roots for read/glob/grep tools."""
+    roots: list[Path] = []
+    if context.memory_root:
+        roots.append(context.memory_root)
+    if context.workspace_root:
+        roots.append(context.workspace_root)
+    if context.run_folder:
+        roots.append(context.run_folder)
+    roots.append(_global_cache_dir())  # ~/.lerim/cache
+    roots.extend(context.extra_read_roots)
+    return tuple(dict.fromkeys(roots))
+
+def _check_read_boundary(path: Path, context: RuntimeToolContext) -> str | None:
+    """Return error string when read target is outside approved roots, else None."""
+    roots = _read_allowed_roots(context)
+    if not roots or not any(_is_within(path, root) for root in roots):
+        return (
+            f"ERROR: Cannot read '{path}': outside allowed roots. "
+            f"Readable paths: {', '.join(str(r) for r in roots)}"
+        )
+    return None
+```
+
+Read boundaries are more permissive (includes cache and extra roots) but still prevent arbitrary filesystem access.
+
+## Decision policy for add|update|no-op
+
+The lead agent follows a deterministic decision policy during sync:
+
+1. **Extract candidates**: Run `extract_pipeline` to get raw candidates
+2. **Search existing**: Delegate to `explore` to find similar existing memories
+3. **Compare**: Evaluate semantic overlap and confidence scores
+4. **Decide**: For each candidate:
+   - `add` — No existing match found
+   - `update` — Existing memory found with lower confidence or incomplete information
+   - `no-op` — Existing memory is already high-quality
+
+5. **Write**: Call `write_memory` for `add` decisions, `edit` for `update`, skip for `no-op`
+
+This policy is encoded in the lead agent's prompt, not in code.
+
+<Tip>
+The decision policy uses the explorer's structured search results to make deterministic choices. This reduces hallucination compared to asking the LLM to "decide if similar memories exist."
+</Tip>
+
+## Sync flow implementation
+
+The sync flow processes one session trace:
+
+```python
+# src/lerim/runtime/agent.py:491-608
+def sync(
+    self,
+    trace_path: str | Path,
+    memory_root: str | Path | None = None,
+    workspace_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Run memory-write sync flow and return stable contract payload."""
+    trace_file = Path(trace_path).expanduser().resolve()
+    if not trace_file.exists() or not trace_file.is_file():
+        raise FileNotFoundError(f"trace_path_missing:{trace_file}")
+
+    # ... resolve roots and create run folder ...
+    
+    prompt = build_sync_prompt(
+        trace_file=trace_file,
+        memory_root=resolved_memory_root,
+        run_folder=run_folder,
+        artifact_paths=artifact_paths,
+        metadata=metadata,
+    )
+    
+    context = build_tool_context(
+        repo_root=repo_root,
+        memory_root=resolved_memory_root,
+        workspace_root=resolved_workspace_root,
+        run_folder=run_folder,
+        extra_read_roots=extra_roots,
+        run_id=run_folder.name,
+        config=self.config,
+        trace_path=trace_file,
+        artifact_paths=artifact_paths,
+    )
+    
+    response, _, cost_usd = self._run_agent_once(
+        prompt=prompt,
+        mode="sync",
+        context=context,
+    )
+    
+    # ... validate artifacts and return contract payload ...
+```
+
+The lead agent receives only the `trace_path` and orchestrates all operations through runtime tools.
+
+## Configuration
+
+Lead agent behavior is configured via the `lead` role:
+
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+timeout_seconds = 600
+max_iterations = 10
+fallback_models = ["anthropic/claude-3.7-sonnet"]
+```
+
+Explorer uses the same config:
+
+```toml
+[roles.explorer]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Adapters" icon="plug" href="/architecture/adapters">
+    Learn how platform adapters provide session traces to the runtime
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/model-roles">
+    Configure runtime models and orchestration settings
+  </Card>
+</CardGroup>

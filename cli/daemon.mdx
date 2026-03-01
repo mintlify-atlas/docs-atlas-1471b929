@@ -1,0 +1,243 @@
+---
+title: "lerim daemon"
+description: "Run recurring sync + maintain loop"
+---
+
+## Overview
+
+Runs a continuous loop: sync (index + extract) then maintain (refine), repeating at configurable intervals. Use `--once` for a single cycle.
+
+<Note>
+  Sessions are processed sequentially in chronological order (oldest first) so that later sessions can update memories from earlier ones.
+</Note>
+
+## Syntax
+
+```bash
+lerim daemon [--once] [--max-sessions N] [--poll-seconds N]
+```
+
+## Parameters
+
+<ParamField path="--once" type="boolean" default="false">
+  Run exactly one sync+maintain cycle and exit (instead of looping forever).
+</ParamField>
+
+<ParamField path="--max-sessions" type="integer">
+  Max sessions to extract per cycle. Defaults to `sync_max_sessions` from config (currently 50).
+</ParamField>
+
+<ParamField path="--poll-seconds" type="integer">
+  Override both sync and maintain intervals uniformly (seconds). Minimum 30s.
+  
+  **Note:** This replaces the separate `sync_interval_minutes` and `maintain_interval_minutes` config values.
+</ParamField>
+
+## Examples
+
+### Run forever with default intervals
+
+Start the daemon with config defaults (sync every 10 min, maintain every 60 min):
+
+```bash
+lerim daemon
+```
+
+**Output:**
+```
+Daemon running...
+[2026-03-01 19:00:00] Sync: 3 sessions indexed, 2 memories extracted
+[2026-03-01 19:10:00] Sync: 1 session indexed, 0 memories extracted
+[2026-03-01 20:00:00] Maintain: 5 duplicates merged, 2 items archived
+[2026-03-01 20:10:00] Sync: 0 sessions indexed
+...
+```
+
+Press `Ctrl+C` to stop gracefully.
+
+### One-shot execution
+
+Run a single sync+maintain cycle and exit:
+
+```bash
+lerim daemon --once
+```
+
+**Output:**
+```json
+{
+  "sync": {
+    "sessions_indexed": 3,
+    "memories_extracted": 2,
+    "duration_seconds": 12.4
+  },
+  "maintain": {
+    "duplicates_merged": 1,
+    "items_archived": 0,
+    "duration_seconds": 3.2
+  }
+}
+```
+
+This is useful for:
+- CI/CD pipelines
+- Scheduled cron jobs
+- Testing daemon behavior
+
+### Custom poll interval
+
+Run sync and maintain every 2 minutes:
+
+```bash
+lerim daemon --poll-seconds 120
+```
+
+<Warning>
+  Using very short poll intervals (< 60s) can cause high CPU usage and API costs. Use with caution.
+</Warning>
+
+### Limit sessions per cycle
+
+Process at most 10 sessions per sync:
+
+```bash
+lerim daemon --max-sessions 10
+```
+
+This is useful for:
+- Controlling API costs
+- Limiting extraction latency
+- Testing with small batches
+
+## How it works
+
+### Continuous mode (default)
+
+1. Start sync and maintain loops with independent intervals
+2. Sync loop:
+   - Wait for `sync_interval_minutes` (or `poll_seconds`)
+   - Discover new sessions within `sync_window_days`
+   - Enqueue up to `max_sessions` for extraction
+   - Extract memories using DSPy
+   - Write to `.lerim/memory/`
+3. Maintain loop:
+   - Wait for `maintain_interval_minutes` (or `poll_seconds`)
+   - Scan existing memories
+   - Merge duplicates, archive low-value items, consolidate related memories
+4. Repeat until interrupted
+
+### One-shot mode (`--once`)
+
+1. Run one sync cycle
+2. Run one maintain cycle
+3. Print summary JSON
+4. Exit
+
+## Configuration
+
+Default intervals from `~/.lerim/config.toml`:
+
+```toml
+[daemon]
+sync_interval_minutes = 10    # Sync every 10 minutes
+maintain_interval_minutes = 60  # Maintain every 60 minutes
+sync_window_days = 7           # Look back 7 days for sessions
+sync_max_sessions = 50         # Process up to 50 sessions per sync
+```
+
+You can override these in project config (`<repo>/.lerim/config.toml`) or via CLI flags.
+
+## Daemon vs. serve
+
+| Command | HTTP API | Dashboard | Daemon loop |
+|---------|----------|-----------|-------------|
+| `lerim daemon` | No | No | Yes |
+| `lerim serve` | Yes | Yes | Yes |
+
+**When to use `lerim daemon`:**
+- You only need background sync/maintain (no web UI or API)
+- You're running a separate HTTP server
+- You want minimal resource usage
+
+**When to use `lerim serve`:**
+- You want the full stack (API + dashboard + daemon)
+- You're running in Docker
+- You need to query status or run one-shot commands
+
+## Use cases
+
+### Background service
+
+Run the daemon as a systemd service:
+
+```ini
+# /etc/systemd/system/lerim-daemon.service
+[Unit]
+Description=Lerim Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/home/youruser/project
+ExecStart=/home/youruser/.local/bin/lerim daemon
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable lerim-daemon
+sudo systemctl start lerim-daemon
+sudo systemctl status lerim-daemon
+```
+
+### Scheduled job
+
+Run once per hour via cron:
+
+```cron
+0 * * * * cd /home/user/project && /home/user/.local/bin/lerim daemon --once >> /var/log/lerim.log 2>&1
+```
+
+### Development testing
+
+Quick test with high frequency and limited sessions:
+
+```bash
+lerim daemon --poll-seconds 30 --max-sessions 5
+```
+
+## Monitoring
+
+The daemon logs to stderr (or stdout in `--once` mode). You can redirect output to a log file:
+
+```bash
+lerim daemon >> lerim.log 2>&1 &
+```
+
+Or use process managers like `supervisor`, `pm2`, or `systemd` for automatic restarts and log rotation.
+
+## Exit codes
+
+- **0**: Success (one-shot mode only)
+- **1**: Error - startup failure or unrecoverable error
+
+## Related commands
+
+<CardGroup cols={2}>
+  <Card title="lerim serve" icon="server" href="/cli/serve">
+    Run full server (API + dashboard + daemon)
+  </Card>
+  <Card title="lerim sync" icon="arrows-rotate" href="/cli/sync">
+    One-shot sync (no daemon loop)
+  </Card>
+</CardGroup>
+
+## Notes
+
+- The daemon uses monotonic time to avoid clock drift
+- Errors in sync or maintain are logged but don't crash the daemon
+- In continuous mode, the daemon sleeps until the next scheduled run (no busy polling)
+- Sessions are always processed in chronological order (oldest first)

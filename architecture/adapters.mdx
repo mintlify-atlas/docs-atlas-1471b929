@@ -1,0 +1,439 @@
+---
+title: Agent platform adapters
+description: Platform-specific session discovery, normalization, and JSONL export for Claude, Codex, Cursor, and OpenCode
+---
+
+Lerim uses platform adapters to discover, normalize, and export agent sessions from different coding agent platforms into a unified JSONL format.
+
+## Adapter protocol
+
+All adapters conform to the `Adapter` protocol defined in `src/lerim/adapters/base.py`:
+
+```python
+# src/lerim/adapters/base.py:58-84
+class Adapter(Protocol):
+    """Platform adapter protocol for discovering and loading sessions."""
+
+    def default_path(self) -> Path | None:
+        """Return the default traces directory for this platform."""
+
+    def count_sessions(self, path: Path) -> int:
+        """Return total session count under ``path``."""
+
+    def iter_sessions(
+        self,
+        traces_dir: Path | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        known_run_hashes: dict[str, str] | None = None,
+    ) -> list[SessionRecord]:
+        """List normalized session summaries in the selected time window."""
+
+    def find_session_path(
+        self, session_id: str, traces_dir: Path | None = None
+    ) -> Path | None:
+        """Resolve one session file path by ``session_id``."""
+
+    def read_session(
+        self, session_path: Path, session_id: str | None = None
+    ) -> ViewerSession | None:
+        """Read one session file and return a normalized viewer payload."""
+```
+
+<Note>
+The protocol uses structural typing (`Protocol`), so adapters don't need to inherit from a base class. They just need to implement the required methods.
+</Note>
+
+## Normalized data models
+
+Adapters normalize platform-specific data into two shared models:
+
+### SessionRecord
+
+Summary record for indexing and listings:
+
+```python
+# src/lerim/adapters/base.py:38-55
+@dataclass(frozen=True)
+class SessionRecord:
+    """Summary record used for indexing and session listings."""
+
+    run_id: str
+    agent_type: str
+    session_path: str
+    start_time: str | None = None
+    repo_path: str | None = None
+    repo_name: str | None = None
+    status: str = "completed"
+    duration_ms: int = 0
+    message_count: int = 0
+    tool_call_count: int = 0
+    error_count: int = 0
+    total_tokens: int = 0
+    summaries: list[str] = field(default_factory=list)
+    content_hash: str | None = None
+```
+
+### ViewerSession
+
+Full session payload for dashboard and extraction:
+
+```python
+# src/lerim/adapters/base.py:25-35
+@dataclass
+class ViewerSession:
+    """Normalized session payload returned by platform adapters."""
+
+    session_id: str
+    cwd: str | None = None
+    git_branch: str | None = None
+    messages: list[ViewerMessage] = field(default_factory=list)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    meta: dict[str, Any] = field(default_factory=dict)
+```
+
+## Platform-specific implementations
+
+Lerim includes four platform adapters:
+
+### Claude Code adapter
+
+Reads JSONL files from `~/.claude/projects/`:
+
+```python
+# src/lerim/adapters/claude.py:19-21
+def default_path() -> Path | None:
+    """Return the default Claude traces directory."""
+    return Path("~/.claude/projects/").expanduser()
+```
+
+**Session format**: Native JSONL with `type: user|assistant|summary` entries.
+
+**Normalization**: Minimal — Claude already uses JSONL. Adapter extracts tool_use/tool_result blocks from content arrays.
+
+**Key features**:
+- Supports multi-block content (text + tool_use in single message)
+- Tracks git branch and cwd from session metadata
+- Deduplicates via file content hash
+
+See `src/lerim/adapters/claude.py:40-150` for message parsing logic.
+
+### Codex CLI adapter
+
+Reads JSONL files from `~/.codex/sessions/`:
+
+**Session format**: Native JSONL similar to Claude.
+
+**Normalization**: Similar to Claude adapter — Codex uses the same JSONL schema.
+
+### Cursor adapter
+
+Extracts sessions from Cursor's SQLite database:
+
+```python
+# src/lerim/adapters/cursor.py:38-46
+def default_path() -> Path | None:
+    """Return platform-specific default Cursor storage path."""
+    if sys.platform == "darwin":
+        return Path(
+            "~/Library/Application Support/Cursor/User/globalStorage/"
+        ).expanduser()
+    if sys.platform.startswith("linux"):
+        return Path("~/.config/Cursor/User/globalStorage/").expanduser()
+    # ... fallback ...
+```
+
+**Session format**: SQLite database (`state.vscdb`) with table `cursorDiskKV`.
+
+- Session metadata: `composerData:<composerId>` rows
+- Messages: `bubbleId:<composerId>:<bubbleId>` rows
+
+**Normalization**:
+
+1. Query SQLite for all `composerData` and `bubbleId` rows
+2. Group bubbles by `composerId`
+3. Export each session as JSONL to `~/.lerim/cache/cursor/<composerId>.jsonl`
+4. Return `SessionRecord` pointing to cached JSONL file
+
+```python
+# src/lerim/adapters/cursor.py:240-252
+for cid, bubble_list in bubbles.items():
+    metadata = composers.get(cid, {})
+    started_at = parse_timestamp(metadata.get("createdAt"))
+    if not in_window(started_at, start, end):
+        continue
+
+    # Export JSONL: metadata first line, then bubbles
+    jsonl_path = out_dir / f"{cid}.jsonl"
+    with jsonl_path.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps(metadata) + "\n")
+        for bubble in bubble_list:
+            fh.write(json.dumps(bubble) + "\n")
+```
+
+<Accordion title="Why export to JSONL cache?">
+  <div>
+    Exporting to JSONL serves three purposes:
+
+    1. **Consistency**: Downstream extraction pipeline always reads JSONL, regardless of platform
+    2. **Performance**: Avoid repeated SQLite queries during sync — read from cached file instead
+    3. **Compatibility**: Dashboard and extraction pipeline treat all sessions as JSONL files
+
+    The cache is stored at `~/.lerim/cache/cursor/` and is regenerated on each sync.
+  </div>
+</Accordion>
+
+**Key features**:
+- Platform-specific path detection (macOS vs Linux)
+- Double-encoded JSON value parsing (Cursor stores JSON as JSON strings)
+- Role normalization (bubble types `1=user`, `2=assistant`)
+- Hash-based change detection (skip unchanged sessions)
+
+See `src/lerim/adapters/cursor.py:189-285` for full implementation.
+
+### OpenCode adapter
+
+Extracts sessions from OpenCode's SQLite database:
+
+**Session format**: SQLite database (`opencode.db`) with chat history table.
+
+**Normalization**: Similar to Cursor — query SQLite, group by session, export to JSONL cache at `~/.lerim/cache/opencode/`.
+
+**Default path**: `~/.local/share/opencode/` (Linux/macOS)
+
+## Session discovery flow
+
+Adapters discover sessions through `iter_sessions()`:
+
+1. **Scan**: Recursively search `traces_dir` for session files/databases
+2. **Filter time window**: Skip sessions outside `start`/`end` datetime range
+3. **Hash check**: Compare file content hash against `known_run_hashes` to skip unchanged sessions
+4. **Parse metadata**: Extract session start time, repo info, message/tool counts
+5. **Return records**: Build `SessionRecord` list sorted by start time
+
+```python
+# Example: Claude adapter iter_sessions
+# src/lerim/adapters/claude.py:153-242
+def iter_sessions(
+    traces_dir: Path | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    known_run_hashes: dict[str, str] | None = None,
+) -> list[SessionRecord]:
+    """Enumerate Claude sessions, skipping those whose content hash is unchanged."""
+    base = traces_dir or default_path()
+    if base is None or not base.exists():
+        return []
+
+    records: list[SessionRecord] = []
+    for path in base.rglob("*.jsonl"):
+        run_id = path.stem
+        file_hash = compute_file_hash(path)
+        
+        # Skip if hash matches known session
+        if known_run_hashes and run_id in known_run_hashes:
+            if known_run_hashes[run_id] == file_hash:
+                continue
+
+        # ... parse session metadata ...
+        
+        records.append(
+            SessionRecord(
+                run_id=run_id,
+                agent_type="claude",
+                session_path=str(path),
+                # ... metadata fields ...
+                content_hash=file_hash,
+            )
+        )
+
+    records.sort(key=lambda r: r.start_time or "")
+    return records
+```
+
+<Tip>
+Hash-based change detection prevents re-extracting unchanged sessions. The hash is computed on file content, not mtime.
+</Tip>
+
+## Session normalization to JSONL
+
+All adapters ensure their output is JSONL-compatible:
+
+### Native JSONL platforms (Claude, Codex)
+
+No conversion needed — sessions are already in JSONL format. Adapter validates structure and extracts metadata.
+
+### SQLite platforms (Cursor, OpenCode)
+
+Adapters export to JSONL cache:
+
+```python
+# Cursor export logic
+jsonl_path = out_dir / f"{cid}.jsonl"
+with jsonl_path.open("w", encoding="utf-8") as fh:
+    fh.write(json.dumps(metadata) + "\n")  # First line: session metadata
+    for bubble in bubble_list:
+        fh.write(json.dumps(bubble) + "\n")  # Subsequent lines: messages
+```
+
+Cache location:
+- Cursor: `~/.lerim/cache/cursor/<composerId>.jsonl`
+- OpenCode: `~/.lerim/cache/opencode/<session_id>.jsonl`
+
+## Adapter registry
+
+Adapters are registered in `src/lerim/adapters/registry.py`:
+
+```python
+# src/lerim/adapters/registry.py:12-17
+_ADAPTER_MODULES: dict[str, str] = {
+    "claude": "lerim.adapters.claude",
+    "codex": "lerim.adapters.codex",
+    "opencode": "lerim.adapters.opencode",
+    "cursor": "lerim.adapters.cursor",
+}
+```
+
+Get an adapter by name:
+
+```python
+# src/lerim/adapters/registry.py:24-29
+def get_adapter(name: str):
+    """Return adapter module for a known platform name."""
+    module_path = _ADAPTER_MODULES.get(name)
+    if not module_path:
+        return None
+    return importlib.import_module(module_path)
+```
+
+## Platform connection
+
+Users connect platforms via `lerim connect`:
+
+```bash
+# Auto-detect and connect all supported platforms
+lerim connect auto
+
+# Connect specific platform
+lerim connect cursor
+
+# Custom path override
+lerim connect cursor --path ~/my-cursor-data/globalStorage
+```
+
+Connection metadata is stored in `~/.lerim/platforms.json`:
+
+```json
+{
+  "platforms": {
+    "claude": {
+      "path": "/Users/alice/.claude/projects",
+      "connected_at": "2026-03-01T14:30:00Z"
+    },
+    "cursor": {
+      "path": "/Users/alice/Library/Application Support/Cursor/User/globalStorage",
+      "connected_at": "2026-03-01T14:30:05Z"
+    }
+  }
+}
+```
+
+<Info>
+See `src/lerim/adapters/registry.py:90-139` for connection logic.
+</Info>
+
+## How to add a new adapter
+
+To add support for a new coding agent platform:
+
+### 1. Create adapter module
+
+Create `src/lerim/adapters/yourplatform.py`:
+
+```python
+from pathlib import Path
+from datetime import datetime
+from lerim.adapters.base import SessionRecord, ViewerSession, ViewerMessage
+
+def default_path() -> Path | None:
+    """Return the default session storage path for YourPlatform."""
+    return Path("~/.yourplatform/sessions/").expanduser()
+
+def count_sessions(path: Path) -> int:
+    """Count sessions under path."""
+    return len(list(path.rglob("*.json")))
+
+def iter_sessions(
+    traces_dir: Path | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    known_run_hashes: dict[str, str] | None = None,
+) -> list[SessionRecord]:
+    """Discover and normalize sessions."""
+    # ... implementation ...
+
+def find_session_path(session_id: str, traces_dir: Path | None = None) -> Path | None:
+    """Find session file by ID."""
+    # ... implementation ...
+
+def read_session(
+    session_path: Path, session_id: str | None = None
+) -> ViewerSession | None:
+    """Read and normalize one session."""
+    # ... implementation ...
+```
+
+### 2. Register adapter
+
+Add to `src/lerim/adapters/registry.py`:
+
+```python
+_ADAPTER_MODULES: dict[str, str] = {
+    "claude": "lerim.adapters.claude",
+    "codex": "lerim.adapters.codex",
+    "opencode": "lerim.adapters.opencode",
+    "cursor": "lerim.adapters.cursor",
+    "yourplatform": "lerim.adapters.yourplatform",  # Add this
+}
+```
+
+### 3. Test connection
+
+```bash
+lerim connect yourplatform
+```
+
+The CLI will call `default_path()`, `count_sessions()`, and optionally `validate_connection()` if defined.
+
+### 4. Export to JSONL if needed
+
+If your platform uses a database format:
+
+1. Query the database in `iter_sessions()`
+2. Export each session to `~/.lerim/cache/yourplatform/<session_id>.jsonl`
+3. Return `SessionRecord` with `session_path` pointing to the JSONL file
+
+See `src/lerim/adapters/cursor.py:189-285` for a complete SQLite-to-JSONL example.
+
+<Accordion title="Best practices for adapter implementation">
+  <div>
+    - **Use content hashing**: Implement hash-based change detection to skip unchanged sessions
+    - **Handle missing paths gracefully**: Return empty lists or `None` when paths don't exist
+    - **Normalize timestamps**: Use ISO 8601 format for `start_time` fields
+    - **Extract metadata**: Populate `repo_path`, `repo_name`, `message_count`, `tool_call_count`, etc.
+    - **Cache exports**: For database platforms, export to `~/.lerim/cache/yourplatform/` and reuse cached files
+    - **Add validation**: Implement optional `validate_connection()` for connection health checks
+  </div>
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="CLI reference" icon="terminal" href="/cli/connect">
+    Learn how to connect platforms using the CLI
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/contributing/getting-started">
+    Submit a PR to add a new platform adapter
+  </Card>
+</CardGroup>

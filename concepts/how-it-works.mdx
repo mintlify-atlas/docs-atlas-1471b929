@@ -1,0 +1,221 @@
+---
+title: How it works
+description: Understand Lerim's architecture, data flow, and continual learning system
+---
+
+Lerim is a file-first continual learning layer that gives coding agents persistent, shared memory across sessions and platforms. This page explains the high-level architecture and how data flows through the system.
+
+## Architecture overview
+
+Lerim follows a simple, file-first philosophy:
+
+- **Memory primitives** are stored as plain markdown files in `.lerim/` directories
+- **No database required** — files are the canonical store
+- **Project-scoped by default** — each repository gets its own memory store
+- **Agent-agnostic** — works with Claude Code, Codex, Cursor, OpenCode, and more
+
+The system runs as a single process (`lerim serve`) that provides:
+
+- Daemon loop for continuous sync and maintenance
+- HTTP API for CLI commands and agent integrations
+- Dashboard UI for browsing memories and sessions
+
+<Info>
+When you run `lerim up`, Docker starts the service in a container. Alternatively, use `lerim serve` to run directly without Docker.
+</Info>
+
+## Data flow
+
+Lerim operates through two primary paths: **sync** and **maintain**.
+
+### The sync path
+
+<img src="/assets/sync.png" alt="Sync path diagram" />
+
+The sync path processes new agent sessions and extracts memories:
+
+1. **Discover sessions** — Platform adapters scan agent storage directories (e.g., `~/.claude/projects/`, `~/.codex/sessions/`)
+2. **Index sessions** — New or modified sessions are added to the queue in `~/.lerim/index/sessions.sqlite3`
+3. **Read transcript** — The lead agent loads one session transcript at a time
+4. **Extract candidates** — DSPy pipeline analyzes the transcript and identifies decision and learning candidates
+5. **Deduplicate** — Explorer subagent checks existing memories to avoid duplicates
+6. **Write memories** — Lead agent creates new memory files in `<repo>/.lerim/memory/`
+7. **Write summary** — An episodic summary of the session is stored in `memory/summaries/`
+
+The sync path runs automatically in the background when you run `lerim up`, or manually with `lerim sync`.
+
+<Tip>
+Use `lerim sync --max-sessions 5` to sync only the most recent sessions after a fresh install.
+</Tip>
+
+### The maintain path
+
+<img src="/assets/maintain.png" alt="Maintain path diagram" />
+
+The maintain path runs offline refinement over stored memories:
+
+1. **Scan memories** — Load all existing decision and learning files from `memory/`
+2. **Merge duplicates** — Identify and consolidate similar memories
+3. **Archive low-value entries** — Move memories with low effective confidence to `memory/archived/`
+4. **Consolidate related memories** — Group and strengthen related learnings
+5. **Apply time-based decay** — Reduce confidence for memories that haven't been accessed recently
+
+The maintain path runs periodically in the daemon loop, or manually with `lerim maintain`.
+
+<Note>
+Maintenance is non-destructive — archived memories are moved to `memory/archived/` rather than deleted.
+</Note>
+
+## Agent orchestration
+
+Lerim uses **PydanticAI** for agent orchestration with strict security boundaries:
+
+### Lead agent
+
+The lead agent orchestrates all flows and is the only component allowed to write memory files:
+
+- **Tools**: `read`, `glob`, `grep`, `write`, `write_memory`, `edit`, `extract_pipeline`, `summarize_pipeline`
+- **Write boundary**: Runtime tools deny writes outside `memory_root` and workspace directories
+- **Deterministic decision policy**: Uses `add|update|no-op` logic to avoid duplicate or low-value memories
+
+### Explorer subagent
+
+A read-only agent delegated from the lead for gathering existing memory context:
+
+- **Tools**: `read`, `glob`, `grep` only
+- **Cannot write** — no access to write or edit tools
+- **Purpose**: Find similar memories to help with deduplication
+
+### DSPy pipelines
+
+Called as tools from the lead agent:
+
+- **Extraction**: Uses `dspy.ChainOfThought` with transcript windowing to extract memory candidates
+- **Summarization**: Creates structured session summaries with frontmatter metadata
+- **Windowing**: Large transcripts are split into overlapping windows (default 300K tokens per window with overlap)
+
+## Deployment model
+
+Lerim runs as a single process that combines the daemon, HTTP API, and dashboard:
+
+```
+CLI / clients                       lerim serve (Docker or direct)
+─────────────                       ──────────────────────────────
+lerim ask "q"   ──HTTP POST──►     /api/ask
+lerim sync      ──HTTP POST──►     /api/sync
+lerim status    ──HTTP GET───►     /api/status
+skills (curl)   ──HTTP───────►     /api/*
+browser         ──HTTP───────►     dashboard UI
+
+lerim init        (host only)
+lerim project add (host only)
+lerim up/down     (host only)
+```
+
+**Setup commands** (`init`, `project add`, `up`, `down`) run on the host and manage configuration.
+
+**Service commands** (`ask`, `sync`, `maintain`, `status`) are thin HTTP clients that forward requests to the running server.
+
+## Storage model
+
+### Project scope: `<repo>/.lerim/`
+
+Each registered project stores its own memories and run artifacts:
+
+```
+<repo>/.lerim/
+  config.toml              # project overrides
+  memory/
+    decisions/
+      20260220-use-jwt-auth.md
+    learnings/
+      20260221-pytest-fixtures.md
+    summaries/
+      20260222/
+        153000/
+          refactored-auth-module.md
+    archived/
+      decisions/
+      learnings/
+  workspace/
+    sync-20260220-120000-abc123/
+      extract.json
+      summary.json
+      memory_actions.json
+      agent.log
+  index/
+    memories.sqlite3       # access tracker
+```
+
+### Global scope: `~/.lerim/`
+
+Shared across all projects:
+
+```
+~/.lerim/
+  config.toml              # user configuration
+  index/
+    sessions.sqlite3       # session catalog & queue
+  cache/
+    cursor/                # SQLite → JSONL exports
+    opencode/
+  activity.log            # sync/maintain history
+  platforms.json          # connected agent platforms
+```
+
+<Info>
+Memories are always project-scoped. The `project_fallback_global` mode exists in config but global memory fallback is not yet implemented.
+</Info>
+
+## Scope resolution
+
+Configuration is loaded in priority order (low to high):
+
+1. `src/lerim/config/default.toml` (shipped defaults)
+2. `~/.lerim/config.toml` (user global)
+3. `<repo>/.lerim/config.toml` (project overrides)
+4. `LERIM_CONFIG` env var (explicit override for CI/tests)
+
+API keys come from environment variables only: `ZAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
+
+## Security boundaries
+
+Lerim enforces strict security boundaries to prevent agents from writing outside approved directories:
+
+- Runtime tools reject `write` and `edit` operations outside `memory_root` and workspace roots
+- Memory files can only be created via the `write_memory` tool, which accepts structured fields and builds markdown in Python — the LLM never assembles frontmatter directly
+- All file operations use Python tools (no shell/subprocess execution)
+- Explorer subagent is read-only
+- HTTP API binds to `127.0.0.1` by default (localhost only, no auth needed)
+
+## Observability
+
+Lerim uses minimal stderr logging with detailed tracing through OpenTelemetry:
+
+- **Loguru** for short status lines on stderr
+- **OpenTelemetry + Logfire** for detailed agent traces, model calls, tool calls, tokens, and timing
+- **Per-run LLM cost tracking** via OpenRouter's usage data
+- **Activity log** at `~/.lerim/activity.log` records sync/maintain cycles with stats and costs
+
+Enable tracing with `LERIM_TRACING=1` or `[tracing] enabled = true` in config.
+
+<Tip>
+View traces at [logfire.pydantic.dev](https://logfire.pydantic.dev) after running `logfire auth` and `logfire projects new`.
+</Tip>
+
+## What's next?
+
+<CardGroup cols={2}>
+  <Card title="Memory model" icon="database" href="/concepts/memory-model">
+    Learn about the file structure, frontmatter schemas, and memory primitives
+  </Card>
+  <Card title="Sync and maintain" icon="rotate" href="/concepts/sync-maintain">
+    Understand the sync and maintain processes in detail
+  </Card>
+  <Card title="Supported agents" icon="robot" href="/concepts/supported-agents">
+    See which coding agents are supported and how sessions are stored
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure models, roles, tracing, and more
+  </Card>
+</CardGroup>

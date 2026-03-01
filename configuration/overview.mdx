@@ -1,0 +1,191 @@
+---
+title: Configuration overview
+description: Learn how Lerim's layered TOML configuration system works
+---
+
+Lerim uses a layered TOML configuration system that gives you fine-grained control over how the CLI behaves. Configuration files are layered with a clear precedence order, and API keys are kept secure in environment variables.
+
+## How configuration works
+
+Lerim loads configuration from multiple TOML files and merges them together. Each layer can override settings from the previous layer, giving you global defaults that can be customized per-project.
+
+All configuration is stored in TOML format, making it easy to read and edit by hand. API keys are never stored in config files — they come from environment variables only.
+
+## Configuration precedence
+
+Lower entries override higher ones:
+
+1. **`src/lerim/config/default.toml`** — Shipped with the package (all defaults)
+2. **`~/.lerim/config.toml`** — User global overrides
+3. **`<repo>/.lerim/config.toml`** — Project-specific overrides
+4. **`LERIM_CONFIG` env var** — Explicit path override (for CI/tests)
+
+<Note>
+Lerim creates `~/.lerim/config.toml` automatically on first run with helpful comments. Project config files are created when you run commands in a repository.
+</Note>
+
+### Why layers matter
+
+The layered approach lets you:
+
+- Set global defaults in `~/.lerim/config.toml` that apply to all projects
+- Override specific settings per-project in `<repo>/.lerim/config.toml`
+- Test alternative configurations with `LERIM_CONFIG` without touching your main files
+- Keep model preferences and timeouts separate from project-specific memory settings
+
+<Accordion title="Example: Switching models for one project">
+You might use Grok globally but want to use GPT-4o for a specific high-stakes project:
+
+**`~/.lerim/config.toml`** (global):
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+```
+
+**`my-app/.lerim/config.toml`** (project override):
+```toml
+[roles.lead]
+provider = "openai"
+model = "gpt-4o"
+```
+
+When you run `lerim sync` in `my-app/`, Lerim uses GPT-4o. Everywhere else, it uses Grok.
+</Accordion>
+
+## When configuration is loaded
+
+Lerim loads configuration at startup for every command. This means:
+
+- Changes to config files take effect immediately on the next command
+- You don't need to restart the daemon to pick up config changes
+- Each command reads the latest merged configuration
+
+<Info>
+The daemon (`lerim up` or `lerim serve`) loads config once at startup and caches it. If you change config while the daemon is running, restart it with `lerim down && lerim up` to pick up the changes.
+</Info>
+
+## File locations
+
+### User config
+
+**Path:** `~/.lerim/config.toml`
+
+Created automatically on first run. This is where you set your global preferences:
+
+- Model providers and models for each role
+- API base URLs for custom endpoints
+- Server host and port
+- Memory scope preferences
+- Tracing settings
+
+### Project config
+
+**Path:** `<repo>/.lerim/config.toml`
+
+Created automatically when you run Lerim commands in a git repository. This is where you override settings for a specific project:
+
+- Project-specific model choices
+- Memory scope (project-only vs. global fallback)
+- Custom sync/maintain intervals
+
+<Warning>
+Project config files should be committed to version control so your team shares the same Lerim settings. The `.lerim/` directory is safe to commit — memory files and workspace logs are gitignored by default.
+</Warning>
+
+### Default config
+
+**Path:** `src/lerim/config/default.toml` (inside the package)
+
+Shipped with Lerim. You can view the full default config in the [GitHub repository](https://github.com/lerim-dev/lerim-cli/blob/main/src/lerim/config/default.toml) or by running:
+
+```bash
+python -c "from lerim.config.settings import DEFAULT_CONFIG_PATH; print(DEFAULT_CONFIG_PATH.read_text())"
+```
+
+## Environment variables
+
+### API keys
+
+API keys are set as environment variables, never in config files:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."   # OpenRouter (default provider)
+export OPENAI_API_KEY="sk-..."          # OpenAI provider
+export ZAI_API_KEY="..."                # ZAI provider
+export ANTHROPIC_API_KEY="..."          # Anthropic provider (optional)
+```
+
+<Note>
+You can also store these in a `.env` file in your project root. Lerim loads `.env` automatically using `python-dotenv`.
+</Note>
+
+### Configuration overrides
+
+| Variable | Purpose |
+|----------|----------|
+| `LERIM_CONFIG` | Path to an explicit config file (overrides all layers) |
+| `LERIM_TRACING` | Set to `1` to enable OpenTelemetry tracing (overrides `[tracing].enabled`) |
+
+### Using LERIM_CONFIG for testing
+
+The `LERIM_CONFIG` environment variable lets you test alternative configurations without modifying your main config files:
+
+```bash
+# Test with a custom config
+LERIM_CONFIG=~/test-config.toml lerim sync
+
+# Use in CI
+LERIM_CONFIG=/ci/lerim-config.toml lerim maintain
+```
+
+## Configuration sections
+
+Lerim's config is organized into logical sections:
+
+| Section | Purpose |
+|---------|----------|
+| `[data]` | Data directory location |
+| `[memory]` | Memory scope and decay settings |
+| `[server]` | Daemon host, port, and intervals |
+| `[roles.*]` | Model configuration for each role (lead, explorer, extract, summarize) |
+| `[providers]` | API base URLs per provider |
+| `[tracing]` | OpenTelemetry tracing settings |
+| `[agents]` | Connected coding agent platforms |
+| `[projects]` | Registered project paths |
+
+See the [complete config.toml reference](/configuration/config-toml) for details on all available options.
+
+## Agents and projects
+
+The `[agents]` and `[projects]` sections are special — they're written automatically by Lerim commands:
+
+```toml
+[agents]
+claude = "~/.claude/projects"
+codex = "~/.codex/sessions"
+opencode = "~/.local/share/opencode"
+
+[projects]
+my-app = "~/codes/my-app"
+backend = "~/work/backend"
+```
+
+- **`[agents]`** — Written by `lerim init` or `lerim connect`
+- **`[projects]`** — Written by `lerim project add`
+
+You can also edit these sections manually. When running in Docker (`lerim up`), these paths determine the volume mounts. Adding or removing a project restarts the container to update mounts.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Config.toml reference" icon="file-code" href="/configuration/config-toml">
+    Complete reference for all configuration options
+  </Card>
+  <Card title="Model roles" icon="brain" href="/configuration/model-roles">
+    Configure LLM models for each role
+  </Card>
+  <Card title="Tracing setup" icon="chart-line" href="/configuration/tracing">
+    Enable OpenTelemetry tracing with Logfire
+  </Card>
+</CardGroup>

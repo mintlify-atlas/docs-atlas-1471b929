@@ -1,0 +1,414 @@
+---
+title: Native workflow
+description: Run Lerim directly on your host without Docker for development and custom setups
+---
+
+If you prefer not to use Docker, or you're developing Lerim itself, you can run the service directly on your host machine. This gives you more control and visibility into the process.
+
+## When to use native mode
+
+Choose native over Docker when:
+
+- **Developing Lerim**: You're working on the Lerim codebase and need fast iteration
+- **Custom environments**: You have specific Python version requirements or system dependencies
+- **No Docker**: Docker isn't available or allowed in your environment
+- **Debugging**: You want direct access to the process for debugging and profiling
+
+For production use or hands-off operation, [Docker workflow](/guides/docker-workflow) is recommended.
+
+## Setup
+
+<Steps>
+  <Step title="Install Lerim">
+    ```bash
+    pip install lerim
+    ```
+    
+    Or for development:
+    ```bash
+    git clone https://github.com/lerim-dev/lerim-cli.git
+    cd lerim-cli
+    uv venv && source .venv/bin/activate
+    uv pip install -e .
+    ```
+  </Step>
+
+  <Step title="Set API keys">
+    Lerim needs an LLM provider for extraction and querying. Set at least one:
+    ```bash
+    export OPENROUTER_API_KEY="sk-or-..."   # default provider
+    # or
+    export OPENAI_API_KEY="sk-..."
+    # or
+    export ZAI_API_KEY="..."
+    ```
+  </Step>
+
+  <Step title="Initialize config">
+    Run the interactive setup:
+    ```bash
+    lerim init
+    ```
+    This creates `~/.lerim/config.toml` with your agent connections.
+  </Step>
+
+  <Step title="Connect agents">
+    Auto-detect and connect your coding agents:
+    ```bash
+    lerim connect auto
+    ```
+  </Step>
+
+  <Step title="Add projects">
+    Register the repositories you want to track:
+    ```bash
+    lerim project add ~/codes/my-app
+    lerim project add .
+    ```
+  </Step>
+</Steps>
+
+## Running the server
+
+The `lerim serve` command starts everything you need in a single process:
+
+- **HTTP API** on port 8765 (configurable)
+- **Web dashboard** at `http://localhost:8765`
+- **Background daemon** for sync and maintain loops
+
+```bash
+lerim serve
+```
+
+Output:
+
+```
+Lerim serve running at http://0.0.0.0:8765/
+Sync: 3 sessions enqueued, 2 extracted
+Maintain: merged 1 duplicate, archived 0 stale
+```
+
+<Note>
+`lerim serve` is the Docker container entrypoint, but works perfectly on the host. It runs a continuous daemon loop with automatic sync and maintenance.
+</Note>
+
+### Custom host and port
+
+```bash
+lerim serve --host 0.0.0.0 --port 8765
+lerim serve --host 127.0.0.1 --port 9000
+```
+
+## Running the daemon manually
+
+If you want more control over the daemon behavior, run it separately from the HTTP server:
+
+```bash
+lerim daemon
+```
+
+This runs a continuous loop: sync (index + extract) then maintain (refine), repeating at configurable intervals.
+
+### One-shot execution
+
+Run a single sync + maintain cycle and exit:
+
+```bash
+lerim daemon --once
+```
+
+Useful for:
+- Testing extraction pipelines
+- Cron jobs or scheduled tasks
+- CI/CD integration
+
+### Custom poll interval
+
+Override sync and maintain intervals uniformly:
+
+```bash
+lerim daemon --poll-seconds 120  # poll every 2 minutes
+```
+
+<Warning>
+Minimum poll interval is 30 seconds. Lower values risk overloading your LLM provider.
+</Warning>
+
+## Service commands
+
+Once `lerim serve` or `lerim daemon` is running, these commands talk to the HTTP API:
+
+<CodeGroup>
+```bash Ask questions
+lerim ask "Why did we choose Postgres?"
+```
+
+```bash Trigger sync
+lerim sync
+```
+
+```bash Check status
+lerim status
+```
+
+```bash Run maintenance
+lerim maintain
+```
+</CodeGroup>
+
+If the server isn't running, these commands fail:
+
+```
+Lerim is not running. Start with: lerim up (Docker) or lerim serve (direct)
+```
+
+## Local-only commands
+
+Some commands run directly on the host without needing a server:
+
+<CodeGroup>
+```bash Search memories
+lerim memory search "database migration"
+```
+
+```bash List memories
+lerim memory list --limit 20
+```
+
+```bash Add manual memory
+lerim memory add --title "Use FastAPI" --body "Switched from Flask for async support"
+```
+
+```bash Connect agents
+lerim connect auto
+```
+
+```bash Manage projects
+lerim project list
+```
+</CodeGroup>
+
+These commands work whether or not the daemon is running.
+
+## Development workflow
+
+For active development on Lerim:
+
+<Steps>
+  <Step title="Clone and install">
+    ```bash
+    git clone https://github.com/lerim-dev/lerim-cli.git
+    cd lerim-cli
+    uv venv && source .venv/bin/activate
+    uv pip install -e .
+    ```
+  </Step>
+
+  <Step title="Setup Lerim">
+    ```bash
+    lerim init
+    lerim project add .  # track the Lerim repo itself
+    ```
+  </Step>
+
+  <Step title="Run tests">
+    ```bash
+    tests/run_tests.sh unit
+    tests/run_tests.sh all
+    ```
+  </Step>
+
+  <Step title="Start development server">
+    ```bash
+    lerim serve
+    ```
+    Changes to the code require restarting the server.
+  </Step>
+
+  <Step title="Test extraction">
+    ```bash
+    lerim sync --max-sessions 5
+    lerim memory list
+    ```
+  </Step>
+</Steps>
+
+## Process management
+
+Unlike Docker, native mode requires manual process management.
+
+### Running in background
+
+Use `nohup` or `screen` to keep Lerim running after logout:
+
+```bash
+nohup lerim serve > lerim.log 2>&1 &
+```
+
+Or with `screen`:
+
+```bash
+screen -S lerim
+lerim serve
+# Press Ctrl+A, then D to detach
+```
+
+Reattach later:
+
+```bash
+screen -r lerim
+```
+
+### Systemd service
+
+For Linux systems, create a systemd unit file:
+
+```ini /etc/systemd/system/lerim.service
+[Unit]
+Description=Lerim Memory Service
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/home/your-username
+Environment="OPENROUTER_API_KEY=sk-or-..."
+ExecStart=/home/your-username/.local/bin/lerim serve
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl enable lerim
+sudo systemctl start lerim
+sudo systemctl status lerim
+```
+
+<Tip>
+Replace `/home/your-username/.local/bin/lerim` with the output of `which lerim`.
+</Tip>
+
+## Daemon intervals
+
+The daemon runs two independent loops:
+
+- **Sync interval**: Default 10 minutes — indexes new sessions and extracts memories
+- **Maintain interval**: Default 60 minutes — merges duplicates, archives stale items
+
+Configure in `~/.lerim/config.toml`:
+
+```toml
+[daemon]
+sync_interval_minutes = 10
+maintain_interval_minutes = 60
+```
+
+Or override both uniformly:
+
+```bash
+lerim daemon --poll-seconds 300  # 5 minutes
+```
+
+## Comparing workflows
+
+| Feature | Docker | Native |
+|---------|--------|--------|
+| **Setup** | `lerim up` | `lerim serve` |
+| **Process isolation** | Yes | No |
+| **Auto-restart** | Yes (Docker restart policy) | No (manual or systemd) |
+| **Port binding** | Configured in docker-compose | Configured in CLI flags |
+| **Logs** | `lerim logs` | Stdout or manual redirection |
+| **Updates** | Pull new image | `pip install --upgrade lerim` |
+| **Development** | Requires rebuild | Instant edits with `-e` |
+
+## Accessing the dashboard
+
+With `lerim serve` running, open your browser:
+
+```
+http://localhost:8765
+```
+
+Or check the URL programmatically:
+
+```bash
+lerim dashboard
+# Dashboard: http://localhost:8765
+# The dashboard is served by `lerim serve` (or `lerim up` for Docker).
+```
+
+See the [Dashboard guide](/guides/dashboard) for UI details.
+
+## Troubleshooting
+
+<Accordion title="Command not found: lerim">
+  The `lerim` executable isn't in your PATH.
+
+  **Solution:** Ensure the Python `bin` directory is in your PATH:
+  ```bash
+  export PATH="$HOME/.local/bin:$PATH"
+  ```
+
+  Or activate your virtual environment:
+  ```bash
+  source .venv/bin/activate
+  ```
+</Accordion>
+
+<Accordion title="Port already in use">
+  Another process is using port 8765.
+
+  **Solution:** Use a different port:
+  ```bash
+  lerim serve --port 9000
+  ```
+
+  Or find and kill the conflicting process:
+  ```bash
+  lsof -i :8765
+  kill <PID>
+  ```
+</Accordion>
+
+<Accordion title="API key not found">
+  Lerim can't find an LLM provider API key.
+
+  **Solution:** Export your API key in the current shell:
+  ```bash
+  export OPENROUTER_API_KEY="sk-or-..."
+  ```
+
+  For persistent keys, add to `~/.bashrc`, `~/.zshrc`, or `~/.profile`:
+  ```bash
+  echo 'export OPENROUTER_API_KEY="sk-or-..."' >> ~/.bashrc
+  source ~/.bashrc
+  ```
+</Accordion>
+
+<Accordion title="Daemon not syncing">
+  Check that the daemon is actually running:
+  ```bash
+  ps aux | grep lerim
+  ```
+
+  Force a sync manually:
+  ```bash
+  lerim sync
+  ```
+
+  Verify connected platforms:
+  ```bash
+  lerim connect list
+  ```
+</Accordion>
+
+## Next steps
+
+- Query memories with [lerim ask](/guides/querying-memories)
+- Explore the [dashboard interface](/guides/dashboard)
+- Switch to [Docker workflow](/guides/docker-workflow) for production

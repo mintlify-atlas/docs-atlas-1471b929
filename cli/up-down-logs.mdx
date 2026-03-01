@@ -1,0 +1,433 @@
+---
+title: lerim up / down / logs
+description: Docker container lifecycle commands for starting, stopping, and monitoring Lerim
+---
+
+These commands manage the Lerim Docker container lifecycle. They are the recommended way to run Lerim as a persistent service.
+
+<Note>
+These are **host-only** commands - they run locally and do not require a Lerim server (they start/stop the server).
+</Note>
+
+## Prerequisites
+
+- Docker installed and running ([Get Docker](https://docs.docker.com/get-docker/))
+- `lerim init` completed
+- At least one project registered with `lerim project add`
+
+## lerim up
+
+Start the Lerim Docker container. Reads configuration from `~/.lerim/config.toml`, generates a `docker-compose.yml` file with volume mounts for agents and projects, and starts the container.
+
+### Syntax
+
+```bash
+lerim up
+lerim up --build
+```
+
+### Flags
+
+<ParamField path="--build" type="boolean">
+  Build the Docker image from the local `Dockerfile` instead of pulling the pre-built image from GitHub Container Registry (GHCR).
+
+  Use this when:
+  - Developing Lerim locally
+  - Testing Dockerfile changes
+  - Working in an environment without GHCR access
+
+  ```bash
+  lerim up --build
+  ```
+
+  **Default:** Pull the pre-built image from `ghcr.io/lerim-dev/lerim:latest`
+</ParamField>
+
+### What it does
+
+1. **Reads config** - Loads `~/.lerim/config.toml` to find registered projects and connected agents
+2. **Generates docker-compose.yml** - Creates `~/.lerim/docker-compose.yml` with volume mounts:
+   - Agent session stores (e.g. `~/.claude/projects`) mounted read-only
+   - Project directories (e.g. `~/codes/my-app`) mounted read-only
+   - Lerim data directory (`~/.lerim`) mounted read-write
+3. **Pulls or builds image**:
+   - Without `--build`: Pulls `ghcr.io/lerim-dev/lerim:latest`
+   - With `--build`: Builds from local `Dockerfile`
+4. **Starts container** - Runs `docker compose up -d` to start the service
+5. **Starts background daemon** - Inside the container, `lerim serve` runs the HTTP API, dashboard, and sync/maintain daemon loop
+
+### Examples
+
+#### Standard usage (pull GHCR image)
+
+```bash
+lerim up
+```
+
+Output:
+```bash
+Starting Lerim with 2 projects and 3 agents...
+Lerim is running at http://localhost:8765
+```
+
+#### Local development (build from Dockerfile)
+
+```bash
+# Clone the repo
+git clone https://github.com/lerim-dev/lerim-cli
+cd lerim-cli
+
+# Install and build locally
+uv venv && source .venv/bin/activate
+uv pip install -e .
+lerim up --build
+```
+
+#### First-time setup
+
+```bash
+lerim init
+lerim project add ~/codes/my-app
+lerim project add ~/codes/frontend
+lerim up
+
+# Wait for container to start, then check status
+lerim status
+```
+
+### Generated docker-compose.yml
+
+Example generated file (`~/.lerim/docker-compose.yml`):
+
+```yaml
+services:
+  lerim:
+    image: ghcr.io/lerim-dev/lerim:latest
+    container_name: lerim
+    ports:
+      - "8765:8765"
+    volumes:
+      # Lerim data (read-write)
+      - /Users/you/.lerim:/root/.lerim
+      
+      # Agent session stores (read-only)
+      - /Users/you/.claude/projects:/root/.claude/projects:ro
+      - /Users/you/.codex/sessions:/root/.codex/sessions:ro
+      - /Users/you/Library/Application Support/Cursor/User/globalStorage:/root/Library/Application Support/Cursor/User/globalStorage:ro
+      
+      # Projects (read-only)
+      - /Users/you/codes/my-app:/workspace/my-app:ro
+      - /Users/you/codes/frontend:/workspace/frontend:ro
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    restart: unless-stopped
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Container started successfully |
+| `1` | Docker error (daemon not running, build failed, etc.) |
+
+---
+
+## lerim down
+
+Stop the Lerim Docker container and clean up.
+
+### Syntax
+
+```bash
+lerim down
+```
+
+No arguments or flags.
+
+### What it does
+
+1. **Stops container** - Runs `docker compose down` using `~/.lerim/docker-compose.yml`
+2. **Removes container** - Cleans up the stopped container
+3. **Preserves data** - Volumes and data in `~/.lerim/` are **not** deleted
+
+### Examples
+
+```bash
+# Stop Lerim
+lerim down
+
+# Restart Lerim
+lerim down && lerim up
+```
+
+### Output
+
+```bash
+$ lerim down
+
+Lerim stopped.
+```
+
+If the container wasn't running:
+
+```bash
+$ lerim down
+
+Lerim is not running.
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Container stopped or wasn't running |
+| `1` | Docker error |
+
+---
+
+## lerim logs
+
+View or tail the Docker container logs.
+
+### Syntax
+
+```bash
+lerim logs
+lerim logs --follow
+lerim logs -f
+```
+
+### Flags
+
+<ParamField path="--follow" type="boolean">
+  Follow log output in real-time (like `tail -f`). Press `Ctrl+C` to stop.
+
+  Short form: `-f`
+
+  ```bash
+  lerim logs --follow
+  lerim logs -f
+  ```
+
+  **Default:** Show logs and exit
+</ParamField>
+
+### What it does
+
+Runs `docker compose logs` to display container logs. Without `--follow`, shows recent logs and exits. With `--follow`, streams logs continuously.
+
+### Examples
+
+#### View recent logs
+
+```bash
+lerim logs
+```
+
+Output:
+```
+lerim  | [2026-03-01 09:30:45] Lerim serve running at http://0.0.0.0:8765
+lerim  | [2026-03-01 09:30:50] sync: found 3 new sessions
+lerim  | [2026-03-01 09:31:15] sync: extracted 5 decisions, 8 learnings
+lerim  | [2026-03-01 09:35:00] maintain: merged 2 duplicates
+```
+
+#### Stream logs in real-time
+
+```bash
+lerim logs --follow
+
+# Or short form
+lerim logs -f
+```
+
+Press `Ctrl+C` to stop following.
+
+#### Debug sync issues
+
+```bash
+# In one terminal, tail logs
+lerim logs -f
+
+# In another terminal, trigger sync
+lerim sync --dry-run
+```
+
+### Log levels
+
+Lerim logs include:
+- HTTP API requests (`POST /api/sync`, `GET /api/status`)
+- Daemon loop activity (sync/maintain cycles)
+- Session indexing and extraction
+- Memory operations (add, update, merge, archive)
+- Errors and warnings
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Logs displayed successfully (or interrupted with Ctrl+C) |
+| `1` | Docker error or compose file not found |
+
+---
+
+## Common workflows
+
+### Start and monitor
+
+```bash
+lerim up
+lerim logs -f    # Watch logs in real-time
+```
+
+### Restart after config changes
+
+```bash
+lerim down
+lerim up
+lerim status     # Verify it's running
+```
+
+### Check if running
+
+```bash
+lerim status
+
+# Or check Docker directly
+docker ps | grep lerim
+```
+
+### Debug startup issues
+
+```bash
+# Start with verbose logs
+lerim up
+lerim logs
+
+# Check container status
+docker ps -a | grep lerim
+
+# Inspect container
+docker inspect lerim
+```
+
+### Update to latest version
+
+```bash
+# Pull latest image
+docker pull ghcr.io/lerim-dev/lerim:latest
+
+# Restart
+lerim down
+lerim up
+```
+
+### Run without Docker
+
+If you prefer not to use Docker:
+
+```bash
+# Instead of: lerim up
+lerim serve &         # Start HTTP server in background
+
+# Or run daemon loop directly
+lerim daemon          # Continuous sync + maintain
+```
+
+---
+
+## Troubleshooting
+
+### "Docker daemon not running"
+
+Start Docker Desktop or the Docker daemon:
+
+```bash
+# macOS
+open -a Docker
+
+# Linux
+sudo systemctl start docker
+```
+
+### "No compose file found"
+
+Run `lerim up` to generate the compose file:
+
+```bash
+lerim up
+```
+
+The file is created at `~/.lerim/docker-compose.yml`.
+
+### Container won't start
+
+Check logs:
+
+```bash
+lerim logs
+```
+
+Common issues:
+- API keys not set (`OPENROUTER_API_KEY` required)
+- Port 8765 already in use
+- Volume mount permissions
+
+### Port already in use
+
+Change the port in `~/.lerim/config.toml`:
+
+```toml
+server_port = 8766
+```
+
+Then restart:
+
+```bash
+lerim down
+lerim up
+```
+
+### API keys not working
+
+Set environment variables before starting:
+
+```bash
+export OPENROUTER_API_KEY="your-key"
+lerim down
+lerim up
+```
+
+Or add them to `~/.lerim/docker-compose.yml` and restart.
+
+---
+
+## Related commands
+
+- [`lerim init`](/cli/init) - Initial setup before starting Docker
+- [`lerim project add`](/cli/project) - Register projects to mount
+- [`lerim status`](/cli/sync) - Check if Lerim is running
+- `lerim serve` - Run without Docker
+- `lerim daemon` - Run background loop without Docker
+
+---
+
+## Dashboard access
+
+After starting Lerim with `lerim up`, the dashboard is available at:
+
+**http://localhost:8765**
+
+(or whatever port you configured in `server_port`)
+
+The dashboard shows:
+- Session analytics and activity charts
+- Memory library with search and editing
+- Sync/maintain pipeline status
+- Runtime configuration
+
+<Tip>
+Bookmark `http://localhost:8765` for quick access to the Lerim dashboard.
+</Tip>

@@ -1,0 +1,466 @@
+---
+title: Testing
+description: Running tests and understanding the Lerim test structure
+---
+
+Lerim has a comprehensive test suite organized into four tiers: unit, smoke, integration, and e2e. Tests are directory-based, with no marker filtering needed.
+
+## Quick reference
+
+The test runner script auto-activates your virtual environment and runs tests from the project root:
+
+<CodeGroup>
+```bash Unit tests
+tests/run_tests.sh unit
+```
+
+```bash Smoke tests
+tests/run_tests.sh smoke
+```
+
+```bash Integration tests
+tests/run_tests.sh integration
+```
+
+```bash E2E tests
+tests/run_tests.sh e2e
+```
+
+```bash Lint check
+tests/run_tests.sh lint
+```
+
+```bash All tests
+tests/run_tests.sh all
+```
+</CodeGroup>
+
+<Note>
+The test runner automatically activates `.venv` if it exists and is not already active.
+</Note>
+
+## Test organization
+
+Tests are organized by tier in subdirectories:
+
+```text
+tests/
+  conftest.py              # Root: shared fixtures, marker registration
+  helpers.py               # make_config, run_cli, etc.
+  run_tests.sh             # Directory-based test selection
+  test_config.toml         # Default LLM config for smoke/integration/e2e
+  js_render_harness.js     # JavaScript rendering test
+  fixtures/                # Shared across tiers
+    traces/                # JSONL session traces
+    memories/              # Seeded memory files
+  unit/                    # Flat, descriptive names. No LLM, <5s.
+    conftest.py            # autouse dummy API key
+  smoke/                   # Quick LLM sanity, requires LERIM_SMOKE=1
+    conftest.py            # Skip gate
+  integration/             # Real LLM, quality checks, requires LERIM_INTEGRATION=1
+    conftest.py            # Skip gate
+  e2e/                     # Full CLI flows, requires LERIM_E2E=1
+    conftest.py            # Skip gate
+```
+
+<Info>
+Test selection is **directory-based**: `pytest tests/unit/` runs only unit tests. No `--ignore` flags or marker filtering needed.
+</Info>
+
+## Test markers
+
+Lerim uses pytest markers to categorize tests. Markers are defined in `pyproject.toml`:
+
+| Marker | Description | Environment variable |
+|--------|-------------|---------------------|
+| `unit` | Fast, deterministic tests with no LLM calls | N/A (default) |
+| `smoke` | Quick LLM sanity checks | `LERIM_SMOKE=1` |
+| `integration` | Real LLM pipeline tests | `LERIM_INTEGRATION=1` |
+| `e2e` | End-to-end CLI flows | `LERIM_E2E=1` |
+| `llm` | Non-agentic LLM integration tests | Set by integration tests |
+| `agent` | Agent SDK or CLI integration tests | Set by integration tests |
+| `embeddings` | Embedding integration tests | Set by integration tests |
+| `openrouter` | OpenRouter provider tests | Set by provider tests |
+| `openai` | OpenAI provider tests | Set by provider tests |
+| `zai` | ZAI provider tests | Set by provider tests |
+| `kimi` | Kimi provider tests | Set by provider tests |
+
+## Running tests with pytest
+
+You can also run tests directly with pytest:
+
+<CodeGroup>
+```bash Unit tests only
+pytest tests/unit/ -x -q
+```
+
+```bash Smoke tests (parallel)
+export LERIM_SMOKE=1
+pytest tests/smoke/ -n auto
+```
+
+```bash Integration tests (parallel)
+export LERIM_INTEGRATION=1
+pytest tests/integration/ -n auto
+```
+
+```bash E2E tests (parallel)
+export LERIM_E2E=1
+pytest tests/e2e/ -n auto
+```
+
+```bash Run a specific test file
+pytest tests/unit/test_claude_adapter.py -v
+```
+
+```bash Run a specific test function
+pytest tests/unit/test_claude_adapter.py::test_read_session -v
+```
+</CodeGroup>
+
+<Note>
+Smoke, integration, and e2e tests run in parallel via `pytest-xdist` using `-n auto` to utilize all CPU cores.
+</Note>
+
+## Test categories explained
+
+### Unit tests (`tests/unit/`)
+
+Fast, deterministic tests with no LLM calls and no network. External state (config paths, DB paths) is monkeypatched to temp directories.
+
+**Execution time**: ~2 seconds  
+**Requirements**: None (no API keys needed)
+
+**Example test files**:
+- `test_claude_adapter.py` - Claude JSONL trace parsing and session discovery
+- `test_codex_adapter.py` - Codex trace parsing and session metadata
+- `test_adapter_registry.py` - Adapter loading and registration
+- `test_memory_record.py` - Memory record construction and serialization
+- `test_config.py` - Settings loading and TOML layer merging
+
+<Accordion title="View complete unit test listing">
+- `test_adapter_common.py` - Shared adapter utilities
+- `test_claude_adapter.py` - Claude adapter
+- `test_codex_adapter.py` - Codex adapter
+- `test_opencode_adapter.py` - OpenCode adapter
+- `test_cursor_adapter.py` - Cursor adapter
+- `test_adapter_registry.py` - Registry and platform discovery
+- `test_memory_record.py` - Memory serialization
+- `test_memory_schemas.py` - Pydantic schema validation
+- `test_summary_write.py` - Summary file writing
+- `test_catalog_queries.py` - Session catalog DB queries
+- `test_fts.py` - Full-text search
+- `test_config.py` - Configuration system
+- `test_settings.py` - Settings layer precedence
+- `test_project_scope.py` - Project scope resolution
+- `test_cli.py` - CLI argument parsing
+- `test_docker_compose.py` - Docker compose generation
+- `test_runtime_tools.py` - Runtime tool boundary enforcement
+</Accordion>
+
+### Smoke tests (`tests/smoke/`)
+
+Quick LLM round-trips to verify basic functionality. Requires API keys.
+
+**Execution time**: ~40 seconds (parallel)  
+**Requirements**: `LERIM_SMOKE=1` and LLM API keys
+
+**Test files**:
+- `test_pipelines.py` - DSPy extraction and summarization pipelines
+- `test_agent.py` - PydanticAI agent basic response
+
+### Integration tests (`tests/integration/`)
+
+Multi-component flows with real LLM calls, real file I/O, and real DB writes.
+
+**Execution time**: ~3 minutes (parallel)  
+**Requirements**: `LERIM_INTEGRATION=1` and LLM API keys
+
+**Test files**:
+- `test_extract.py` - Full DSPy extraction pipeline with fixtures
+- `test_summarize.py` - Summarization pipeline with seeded memories
+- `test_agent.py` - Full agent ask with memory context
+- `test_providers.py` - LM provider construction with real backends
+- `test_memory_write.py` - Agent-driven memory write flows
+
+### E2E tests (`tests/e2e/`)
+
+Full CLI command flows as a user would invoke them.
+
+**Execution time**: ~5 minutes (parallel)  
+**Requirements**: `LERIM_E2E=1` and LLM API keys
+
+**Test files**:
+- `test_sync.py` - Full `lerim sync` against fixture traces
+- `test_maintain.py` - Full `lerim maintain` on seeded memories
+- `test_full_cycle.py` - Complete lifecycle: reset → sync → ask
+- `test_context_layers.py` - Context layer resolution end-to-end
+- `test_memory_write_modes.py` - Agent memory write modes
+
+## Test script usage
+
+The `tests/run_tests.sh` script provides several options:
+
+```bash
+tests/run_tests.sh [group] [options]
+```
+
+**Groups**:
+- `lint` - Run ruff linter
+- `unit` - Unit tests (no LLM calls)
+- `smoke` - Smoke tests (quick LLM round-trips)
+- `integration` - Integration tests (real LLM pipelines)
+- `e2e` - End-to-end tests (full sync/maintain flows)
+- `quality` - Compile check + pip check
+- `all` - Run all groups in order
+
+**LLM configuration options**:
+```bash
+--llm-provider PROVIDER
+--llm-model MODEL
+--llm-base-url URL
+--agent-provider PROVIDER
+--agent-model MODEL
+```
+
+**Example**:
+```bash
+tests/run_tests.sh smoke --llm-provider openrouter --llm-model x-ai/grok-4.1-fast
+```
+
+<Warning>
+Some test tiers require API keys. Set these as environment variables:
+- `OPENROUTER_API_KEY`
+- `ZAI_API_KEY` or `ZAI_CODING_API_KEY`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY` (optional)
+</Warning>
+
+## Environment variables
+
+| Variable | Required for | Default |
+|----------|-------------|---------||
+| `LERIM_SMOKE=1` | Smoke tests | - |
+| `LERIM_INTEGRATION=1` | Integration tests | - |
+| `LERIM_E2E=1` | E2E tests | - |
+| `LERIM_CONFIG` | Override config path | `tests/test_config.toml` |
+| `LERIM_TEST_PROVIDER` | Override provider | `openrouter` |
+| `LERIM_TEST_MODEL` | Override model | `x-ai/grok-4.1-fast` |
+
+<Info>
+The root `conftest.py` automatically applies `tests/test_config.toml` when running smoke/integration/e2e tests.
+</Info>
+
+## Test fixtures
+
+Lerim uses hand-crafted fixture files for deterministic testing. Fixtures are NOT auto-generated.
+
+### Trace fixtures (`fixtures/traces/`)
+
+| File | Format | Purpose |
+|------|--------|---------||
+| `claude_simple.jsonl` | Claude | JWT auth decision + CORS learning |
+| `claude_long_multitopic.jsonl` | Claude | Multi-topic session for windowed extraction |
+| `codex_simple.jsonl` | Codex | Basic Codex adapter parsing |
+| `codex_with_tools.jsonl` | Codex | Tool call extraction |
+| `debug_session.jsonl` | Generic | Debugging session for pitfall extraction |
+| `mixed_decisions_learnings.jsonl` | Generic | Multiple primitives in one trace |
+| `edge_short.jsonl` | Generic | Minimal conversation edge case |
+| `edge_empty.jsonl` | Generic | Empty content handling |
+
+### Memory fixtures (`fixtures/memories/`)
+
+| File | Type | Purpose |
+|------|------|---------||
+| `decision_auth_pattern.md` | decision | JWT/HS256 auth decision |
+| `learning_queue_fix.md` | learning | Atomic queue operations |
+| `learning_stale.md` | learning | Low-confidence record for decay testing |
+| `learning_duplicate_a.md` | learning | Deduplication test A |
+| `learning_duplicate_b.md` | learning | Deduplication test B |
+
+## Writing new tests
+
+<Steps>
+  <Step title="Choose the appropriate tier">
+    - **Unit**: No LLM, no network, mocked external state
+    - **Smoke**: Quick LLM sanity check
+    - **Integration**: Multi-component with real LLM
+    - **E2E**: Full CLI command flows
+  </Step>
+
+  <Step title="Create the test file">
+    Place it in the appropriate directory:
+    ```bash
+    tests/unit/test_my_feature.py
+    tests/smoke/test_my_feature.py
+    tests/integration/test_my_feature.py
+    tests/e2e/test_my_feature.py
+    ```
+  </Step>
+
+  <Step title="Add a docstring">
+    Every test file must have a top-level docstring:
+    ```python
+    """Tests for my new feature."""
+    ```
+  </Step>
+
+  <Step title="Write focused tests">
+    Each test function should test ONE thing:
+    ```python
+    def test_my_specific_behavior():
+        """Test that my feature does X when Y."""
+        # Arrange
+        # Act
+        # Assert
+    ```
+  </Step>
+
+  <Step title="Use fixtures">
+    Leverage shared fixtures from `conftest.py`:
+    ```python
+    def test_with_temp_memory(tmp_lerim_root):
+        """Test using temporary Lerim directory."""
+        assert tmp_lerim_root.exists()
+    ```
+  </Step>
+
+  <Step title="Update documentation">
+    Add your test file to `tests/README.md` with a brief description.
+  </Step>
+</Steps>
+
+## Shared test infrastructure
+
+### Root `conftest.py` fixtures
+
+Available to all test tiers:
+
+- `tmp_lerim_root` - Temporary directory with canonical Lerim folder structure
+- `tmp_config` - `Config` object pointing at `tmp_lerim_root`
+- `seeded_memory` - `tmp_lerim_root` with fixture memory files pre-populated
+
+### Helper functions (`tests/helpers.py`)
+
+- `make_config(base)` - Build a deterministic `Config` rooted at a path
+- `write_test_config(tmp_path, **sections)` - Write a TOML config file
+- `run_cli(args)` - Run a CLI command in-process, returns `(exit_code, stdout)`
+- `run_cli_json(args)` - Run a CLI command and parse stdout as JSON
+
+### Tier-specific `conftest.py`
+
+- `unit/conftest.py` - Autouse dummy API key for PydanticAI constructors
+- `smoke/conftest.py` - Skip all unless `LERIM_SMOKE=1`
+- `integration/conftest.py` - Skip all unless `LERIM_INTEGRATION=1`
+- `e2e/conftest.py` - Skip all unless `LERIM_E2E=1`
+
+## CI/CD setup
+
+Lerim uses GitHub Actions for continuous integration. The workflow is defined in `.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v4
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: uv venv && uv pip install -e '.[test,lint]'
+      - run: uv run ruff check src/ tests/
+      - run: uv run python -m pytest tests/unit/ -x -q
+```
+
+<Info>
+Only **unit tests** run in CI by default. Smoke, integration, and e2e tests require API keys and are run manually or in separate workflows.
+</Info>
+
+## Common test patterns
+
+### Testing adapters
+
+```python
+from pathlib import Path
+from lerim.adapters import claude
+
+def test_read_claude_session(tmp_path):
+    """Test Claude adapter reads JSONL session correctly."""
+    # Create a fixture JSONL file
+    session_file = tmp_path / "test.jsonl"
+    session_file.write_text(
+        '{"type":"user","message":{"content":"hello"}}\n'
+        '{"type":"assistant","message":{"content":"hi"}}\n'
+    )
+    
+    # Read the session
+    session = claude.read_session(session_file)
+    
+    # Verify structure
+    assert session is not None
+    assert len(session.messages) == 2
+    assert session.messages[0].role == "user"
+    assert session.messages[0].content == "hello"
+```
+
+### Testing memory operations
+
+```python
+from lerim.memory.schemas import Decision
+
+def test_decision_serialization(tmp_path):
+    """Test decision record serializes to markdown correctly."""
+    decision = Decision(
+        title="Use JWT for auth",
+        body="We chose JWT with HS256 for stateless auth.",
+        confidence=0.9,
+        tags=["auth", "jwt"]
+    )
+    
+    # Write to file
+    output = tmp_path / "decision.md"
+    output.write_text(decision.to_markdown())
+    
+    # Read back and verify
+    content = output.read_text()
+    assert "title: Use JWT for auth" in content
+    assert "JWT with HS256" in content
+```
+
+### Testing CLI commands
+
+```python
+from tests.helpers import run_cli
+
+def test_memory_list_command(seeded_memory):
+    """Test 'lerim memory list' returns expected records."""
+    exit_code, output = run_cli(["memory", "list"])
+    
+    assert exit_code == 0
+    assert "decision" in output.lower()
+    assert "learning" in output.lower()
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Getting started" icon="rocket" href="/contributing/getting-started">
+    Set up your development environment
+  </Card>
+
+  <Card title="Adding adapters" icon="plug" href="/contributing/adding-adapters">
+    Step-by-step guide for adding new agent platform adapters
+  </Card>
+</CardGroup>

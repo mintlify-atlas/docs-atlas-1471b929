@@ -1,0 +1,253 @@
+---
+title: Getting started
+description: Set up your development environment for contributing to Lerim CLI
+---
+
+Lerim is licensed under BSL 1.1. By contributing you agree your changes fall under the same license (1 user free, 2+ users need a commercial license).
+
+## Prerequisites
+
+Before you start developing, ensure you have:
+
+- **Python 3.12+** - Lerim requires Python 3.12 or higher
+- **Docker** (optional) - For building and testing the Docker image
+- **uv** (recommended) - Fast Python package installer and virtual environment manager
+
+<Info>
+Lerim uses `uv` for dependency management. While you can use `pip`, `uv` is significantly faster and is the recommended approach.
+</Info>
+
+## Clone and set up the repository
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/lerim-dev/lerim-cli.git
+    cd lerim-cli
+    ```
+  </Step>
+
+  <Step title="Create and activate a virtual environment">
+    ```bash
+    uv venv && source .venv/bin/activate
+    ```
+
+    On Windows:
+    ```bash
+    uv venv && .venv\Scripts\activate
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install Lerim in editable mode with test dependencies:
+
+    ```bash
+    uv pip install -e '.[test]'
+    ```
+
+    This installs:
+    - Core dependencies (pydantic, dspy, pydantic-ai, logfire, etc.)
+    - Test dependencies (pytest, pytest-asyncio, pytest-xdist)
+  </Step>
+</Steps>
+
+## Installing optional dependencies
+
+Lerim has several optional dependency groups you can install based on what you're working on:
+
+<CodeGroup>
+```bash Test dependencies
+uv pip install -e '.[test]'
+```
+
+```bash Linting tools
+uv pip install -e '.[lint]'
+```
+
+```bash Documentation tools
+uv pip install -e '.[docs]'
+```
+
+```bash Embeddings support
+uv pip install -e '.[embeddings]'
+```
+
+```bash All dependencies
+uv pip install -e '.[test,lint,docs,embeddings]'
+```
+</CodeGroup>
+
+<Note>
+The embeddings extra includes `lancedb`, `pyarrow`, `torch`, and `transformers` for vector search functionality.
+</Note>
+
+## Running Lerim locally
+
+Once installed, you can run Lerim commands directly:
+
+<Steps>
+  <Step title="Initialize Lerim">
+    ```bash
+    lerim init
+    ```
+    This creates the global configuration directory at `~/.lerim/` and detects your coding agents.
+  </Step>
+
+  <Step title="Add a project">
+    ```bash
+    lerim project add .
+    ```
+    This registers the current directory as a Lerim-tracked project.
+  </Step>
+
+  <Step title="Run the daemon">
+    ```bash
+    lerim daemon
+    ```
+    This runs the sync and maintain loops in your terminal (no Docker required).
+  </Step>
+</Steps>
+
+<Accordion title="Alternative: Run as a service">
+You can also run Lerim as an HTTP server:
+
+```bash
+lerim serve
+```
+
+This starts the API server on `http://localhost:8765` and runs sync/maintain in the background.
+</Accordion>
+
+## Building the Docker image
+
+Lerim ships as a Docker image for production use. To build it locally:
+
+```bash
+docker build -t lerim .
+```
+
+The Dockerfile:
+- Uses `python:3.12-slim` as the base image
+- Installs `curl` and `ripgrep`
+- Installs Lerim from local source
+- Exposes port 8765
+- Runs `lerim serve` as the entrypoint
+
+Test the local image:
+
+```bash
+docker run -p 8765:8765 lerim
+```
+
+## Project structure overview
+
+Understanding the codebase layout will help you navigate and contribute effectively:
+
+```text
+lerim-cli/
+├── src/lerim/
+│   ├── adapters/          # Platform adapters for Claude, Codex, Cursor, OpenCode
+│   │   ├── base.py        # Adapter protocol and shared data models
+│   │   ├── claude.py      # Claude adapter implementation
+│   │   ├── codex.py       # Codex adapter implementation
+│   │   ├── cursor.py      # Cursor adapter implementation
+│   │   ├── opencode.py    # OpenCode adapter implementation
+│   │   ├── common.py      # Shared utilities (timestamps, JSONL, hashing)
+│   │   └── registry.py    # Platform registry and connection management
+│   ├── app/               # CLI and HTTP server
+│   │   ├── cli.py         # Command-line interface
+│   │   └── server.py      # FastAPI HTTP server
+│   ├── config/            # Configuration system
+│   │   └── default.toml   # Default configuration values
+│   ├── memory/            # Memory storage and retrieval
+│   │   ├── schemas.py     # Pydantic models for decisions, learnings, summaries
+│   │   ├── writer.py      # Memory file writing logic
+│   │   └── search.py      # Memory search implementations
+│   ├── runtime/           # Agent orchestration
+│   │   ├── agent.py       # PydanticAI lead agent
+│   │   ├── pipelines.py   # DSPy extraction and summarization
+│   │   └── tools.py       # Runtime tool functions
+│   └── sessions/          # Session catalog and indexing
+│       └── catalog.py     # SQLite session database
+├── tests/                 # Test suite (see testing.mdx)
+├── dashboard/             # React-based dashboard UI
+├── docs/                  # Documentation source files
+├── fixtures/              # Sample data for development
+├── scripts/               # Utility scripts
+└── skills/                # Skills-AI integration
+```
+
+## Key code locations
+
+<CardGroup cols={2}>
+  <Card title="Adding adapters" icon="plug" href="/contributing/adding-adapters">
+    Platform adapters live in `src/lerim/adapters/`. See the dedicated guide for details.
+  </Card>
+
+  <Card title="Memory schemas" icon="database">
+    Memory primitives (decisions, learnings, summaries) are defined in `src/lerim/memory/schemas.py`.
+  </Card>
+
+  <Card title="CLI commands" icon="terminal">
+    CLI entry points and command routing live in `src/lerim/app/cli.py`.
+  </Card>
+
+  <Card title="Agent logic" icon="robot">
+    The PydanticAI lead agent orchestration is in `src/lerim/runtime/agent.py`.
+  </Card>
+</CardGroup>
+
+## Configuration layers
+
+Lerim uses a layered TOML configuration system (low to high priority):
+
+1. `src/lerim/config/default.toml` - Shipped defaults
+2. `~/.lerim/config.toml` - User global overrides
+3. `<repo>/.lerim/config.toml` - Project-specific overrides
+4. `LERIM_CONFIG` environment variable - Explicit override path (used in CI/tests)
+
+<Warning>
+API keys come from environment variables only (`ZAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Never commit API keys to config files.
+</Warning>
+
+## Coding style guidelines
+
+Lerim follows strict coding conventions. The short version:
+
+- **Minimal code** - Prefer fewer functions, fewer layers, fewer lines
+- **Strict schemas** - Use Pydantic models and enums for inputs and outputs
+- **Fail fast** - No `try/except` fallbacks for missing packages. If something is required, let it raise
+- **Docstrings everywhere** - Every file gets a top-level docstring. Every function gets a docstring
+- **Real tests** - Prefer real-path tests over mocked tests
+- **No dead code** - When you replace logic, remove the old path
+- **Config from TOML, keys from env** - Runtime config comes from TOML layers. Only API keys use environment variables
+
+<Info>
+Full coding rules are documented in `docs/simple-coding-rules.md` in the repository.
+</Info>
+
+## Linting before you commit
+
+Always run the linter before submitting a PR:
+
+```bash
+ruff check src/ tests/
+```
+
+Fix auto-fixable issues:
+
+```bash
+ruff check --fix src/ tests/
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Running tests" icon="flask" href="/contributing/testing">
+    Learn how to run the test suite and write new tests
+  </Card>
+
+  <Card title="Adding adapters" icon="plug" href="/contributing/adding-adapters">
+    Step-by-step guide for adding support for new coding agents
+  </Card>
+</CardGroup>

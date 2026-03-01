@@ -1,0 +1,372 @@
+---
+title: lerim project
+description: Register, list, and remove projects tracked by Lerim
+---
+
+The `lerim project` command manages the repositories that Lerim tracks. Each registered project gets a `.lerim/` directory for project-scoped memory storage.
+
+<Note>
+This is a **host-only** command - it runs locally and does not require a Lerim server.
+</Note>
+
+## Syntax
+
+```bash
+lerim project add <path>    # Register a project directory
+lerim project list          # Show registered projects
+lerim project remove <name> # Unregister a project
+```
+
+## Subcommands
+
+### lerim project add
+
+Register a project directory so Lerim can:
+- Create a `.lerim/` folder for project-scoped memories
+- Mount the project into the Docker container (if using `lerim up`)
+- Track sessions relevant to this project
+
+#### Syntax
+
+```bash
+lerim project add <path>
+```
+
+#### Parameters
+
+<ParamField path="path" type="string" required>
+  Path to the project directory. Can be absolute or relative. Use `.` for the current directory.
+
+  The path must exist and be a valid directory.
+
+  ```bash
+  lerim project add ~/codes/my-app
+  lerim project add .
+  lerim project add /absolute/path/to/repo
+  ```
+</ParamField>
+
+#### What it does
+
+1. **Resolves the path** - Expands `~` and relative paths to absolute paths
+2. **Creates `.lerim/` directory** - Initializes the project memory structure:
+   ```
+   <repo>/.lerim/
+     memory/
+       decisions/
+       learnings/
+       summaries/
+       archived/
+     meta/
+     workspace/
+     index/
+   ```
+3. **Updates global config** - Adds the project to `~/.lerim/config.toml`
+4. **Restarts Docker container** (if running) - Remounts volumes to include the new project
+
+#### Examples
+
+```bash
+# Add current directory
+lerim project add .
+
+# Add specific path
+lerim project add ~/codes/my-web-app
+
+# Add multiple projects
+lerim project add ~/codes/frontend
+lerim project add ~/codes/backend
+lerim project add ~/codes/shared-lib
+```
+
+#### Output
+
+```bash
+$ lerim project add ~/codes/my-app
+
+Added project "my-app" (/Users/you/codes/my-app)
+Created /Users/you/codes/my-app/.lerim/
+Restarting Lerim to mount new project...
+Done.
+```
+
+### lerim project list
+
+Show all registered projects with their paths and status.
+
+#### Syntax
+
+```bash
+lerim project list
+lerim project list --json
+```
+
+#### Flags
+
+<ParamField path="--json" type="boolean">
+  Output structured JSON instead of human-readable text.
+
+  ```bash
+  lerim project list --json
+  ```
+</ParamField>
+
+#### Output
+
+**Human-readable:**
+
+```bash
+$ lerim project list
+
+Registered projects: 3
+  my-app: /Users/you/codes/my-app (ok .lerim/)
+  frontend: /Users/you/codes/frontend (ok)
+  archived-proj: /Users/you/old/project (missing)
+```
+
+Status indicators:
+- `ok` - Path exists and is accessible
+- `missing` - Path doesn't exist or isn't accessible
+- `.lerim/` - Project has a `.lerim/` directory
+
+**JSON format:**
+
+```bash
+$ lerim project list --json
+
+[
+  {
+    "name": "my-app",
+    "path": "/Users/you/codes/my-app",
+    "exists": true,
+    "has_lerim": true
+  },
+  {
+    "name": "frontend",
+    "path": "/Users/you/codes/frontend",
+    "exists": true,
+    "has_lerim": false
+  },
+  {
+    "name": "archived-proj",
+    "path": "/Users/you/old/project",
+    "exists": false,
+    "has_lerim": false
+  }
+]
+```
+
+### lerim project remove
+
+Unregister a project from Lerim. This does **not** delete the project files or `.lerim/` directory - it only removes Lerim's tracking of the project.
+
+#### Syntax
+
+```bash
+lerim project remove <name>
+```
+
+#### Parameters
+
+<ParamField path="name" type="string" required>
+  Short name of the project to remove. Use `lerim project list` to see project names.
+
+  ```bash
+  lerim project remove my-app
+  ```
+</ParamField>
+
+#### What it does
+
+1. **Removes from config** - Deletes the project entry from `~/.lerim/config.toml`
+2. **Restarts Docker container** (if running) - Unmounts the project volume
+3. **Preserves project data** - The `.lerim/` directory in your repo is **not** deleted
+
+#### Examples
+
+```bash
+# Remove a project
+lerim project remove my-app
+
+# Remove and clean up manually
+lerim project remove old-proj
+rm -rf ~/codes/old-proj/.lerim
+```
+
+#### Output
+
+```bash
+$ lerim project remove my-app
+
+Removed project "my-app"
+Restarting Lerim...
+Done.
+```
+
+<Warning>
+Removing a project does **not** delete the `.lerim/` directory. If you want to completely remove project-scoped data, delete `<repo>/.lerim/` manually after running `lerim project remove`.
+</Warning>
+
+## Project configuration
+
+Projects are stored in `~/.lerim/config.toml`:
+
+```toml
+[projects.my-app]
+path = "/Users/you/codes/my-app"
+
+[projects.frontend]
+path = "/Users/you/codes/frontend"
+```
+
+You can edit this file manually, but using the CLI commands is recommended to ensure Docker containers are restarted correctly.
+
+## Project-scoped memory
+
+Each project maintains its own memory tree in `<repo>/.lerim/memory/`:
+
+```
+<repo>/.lerim/
+  memory/
+    decisions/
+      decision-use-postgres-20260301-abc123.md
+      decision-api-versioning-20260302-def456.md
+    learnings/
+      learning-slow-tests-20260301-ghi789.md
+    summaries/
+      20260301/
+        093045/
+          session-summary.md
+    archived/
+      decisions/
+      learnings/
+```
+
+Project memories are prioritized over global memories (`~/.lerim/memory/`) during retrieval.
+
+## Docker volume mounting
+
+When using `lerim up`, each registered project is mounted as a read-only volume:
+
+```yaml
+services:
+  lerim:
+    volumes:
+      - /Users/you/codes/my-app:/workspace/my-app:ro
+      - /Users/you/codes/frontend:/workspace/frontend:ro
+      - ~/.lerim:/root/.lerim
+```
+
+Lerim reads session transcripts from connected agent platforms (like `~/.claude/projects`) and writes extracted memories to `<repo>/.lerim/memory/`.
+
+## Examples
+
+### Initial project setup
+
+```bash
+# After lerim init
+lerim project add ~/codes/my-app
+lerim project add ~/codes/frontend
+lerim up
+lerim connect auto
+lerim sync
+```
+
+### Working with multiple projects
+
+```bash
+# Register all your active projects
+lerim project add ~/codes/backend
+lerim project add ~/codes/mobile
+lerim project add ~/codes/infra
+
+# List them
+lerim project list
+
+# Sync all projects
+lerim sync --window 7d
+```
+
+### Removing old projects
+
+```bash
+# Check what's registered
+lerim project list
+
+# Remove archived projects
+lerim project remove old-experiment
+lerim project remove deprecated-api
+
+# Optionally delete their .lerim data
+rm -rf ~/codes/old-experiment/.lerim
+```
+
+### Migrating a project
+
+```bash
+# Remove old path
+lerim project remove my-app
+
+# Add new path
+lerim project add ~/new-location/my-app
+
+# Memories are preserved in ~/new-location/my-app/.lerim
+```
+
+## Exit codes
+
+| Code | Meaning | Example |
+|------|---------|----------|
+| `0` | Success | Project added/removed successfully |
+| `1` | Runtime error | Path doesn't exist, project not found |
+| `2` | Usage error | Missing required argument (path or name) |
+
+## Related commands
+
+- [`lerim init`](/cli/init) - Initial setup before adding projects
+- [`lerim up`](/cli/up-down-logs) - Start Docker with project mounts
+- [`lerim sync`](/cli/sync) - Sync sessions for registered projects
+- `lerim memory reset --scope project` - Reset project-scoped memory
+
+## Troubleshooting
+
+### "Path does not exist"
+
+Make sure the directory exists before adding:
+
+```bash
+mkdir -p ~/codes/my-app
+lerim project add ~/codes/my-app
+```
+
+### "Project not found" when removing
+
+Use the exact project name from `lerim project list`:
+
+```bash
+lerim project list    # Shows: "my-app"
+lerim project remove my-app
+```
+
+### Docker not restarting
+
+If the container doesn't restart automatically:
+
+```bash
+lerim down
+lerim up
+```
+
+### Multiple projects, same name
+
+Project names are derived from directory names. If you have conflicts:
+
+```bash
+# This may cause issues
+~/work/frontend/.lerim
+~/personal/frontend/.lerim
+
+# Rename directories to make them unique
+mv ~/personal/frontend ~/personal/my-frontend
+lerim project add ~/personal/my-frontend
+```

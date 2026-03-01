@@ -1,0 +1,473 @@
+---
+title: Sync and maintain
+description: Understand how Lerim extracts memories from sessions and refines them over time
+---
+
+Lerim operates through two core processes: **sync** extracts new memories from agent sessions, and **maintain** refines the memory store over time. This page explains both processes in detail.
+
+## The sync process
+
+Sync discovers agent sessions, extracts decision and learning candidates, deduplicates against existing memories, and writes new memory files.
+
+### How sync works
+
+<Steps>
+  <Step title="Discover sessions">
+    Platform adapters scan agent storage directories for new or modified sessions:
+    
+    - Claude: `~/.claude/projects/*.jsonl`
+    - Codex: `~/.codex/sessions/*.jsonl`
+    - Cursor: `~/Library/Application Support/Cursor/User/globalStorage/*/state.vscdb`
+    - OpenCode: `~/.local/share/opencode/opencode.db`
+    
+    Sessions are indexed in `~/.lerim/index/sessions.sqlite3` with content hashes for change detection.
+  </Step>
+  
+  <Step title="Queue sessions">
+    New sessions are added to the extraction queue. Hash-based change detection skips unchanged sessions.
+  </Step>
+  
+  <Step title="Read transcript">
+    The lead agent loads one session transcript from the queue. For SQLite-based platforms (Cursor, OpenCode), sessions are exported to JSONL cache files first.
+  </Step>
+  
+  <Step title="Extract candidates">
+    The DSPy extraction pipeline analyzes the transcript:
+    
+    - Transcript is split into overlapping windows (default 300K tokens per window)
+    - Each window is processed with `dspy.ChainOfThought` using the `MemoryExtractSignature`
+    - Per-window candidates are merged and deduplicated in a final ChainOfThought pass
+    - Output: structured list of `MemoryCandidate` objects with primitive type, title, body, confidence, tags, and kind
+  </Step>
+  
+  <Step title="Deduplicate">
+    The explorer subagent searches existing memories to find similar entries:
+    
+    - Uses `glob` and `grep` to search decision and learning files
+    - Compares candidate titles and bodies against existing memories
+    - Returns list of similar memory paths for the lead agent to review
+  </Step>
+  
+  <Step title="Decide action">
+    The lead agent runs a deterministic decision policy for each candidate:
+    
+    - **add** — Create a new memory file (no similar memory exists, or quality is higher)
+    - **update** — Merge with existing memory (similar exists, new info is complementary)
+    - **no-op** — Skip (duplicate or low value)
+  </Step>
+  
+  <Step title="Write memories">
+    The lead agent writes approved candidates to disk:
+    
+    - New memories: `memory/{primitive}/{YYYYMMDD}-{slug}.md`
+    - Updates: Existing file is edited with merged content and updated timestamp
+    - Session summary: `memory/summaries/{YYYYMMDD}/{HHMMSS}/{slug}.md`
+    
+    All writes go through the `write_memory` tool, which enforces frontmatter schemas and security boundaries.
+  </Step>
+  
+  <Step title="Log results">
+    Sync results are logged to:
+    
+    - `~/.lerim/activity.log` — One line per cycle with project, stats, cost, duration
+    - Workspace artifacts in `<repo>/.lerim/workspace/sync-{timestamp}-{id}/`
+  </Step>
+</Steps>
+
+### Running sync
+
+<Tabs>
+  <Tab title="Automatic (daemon)">
+    When you run `lerim up`, sync runs continuously in the background:
+    
+    ```bash
+    lerim up
+    # Daemon automatically syncs new sessions every few minutes
+    ```
+    
+    Check sync status:
+    
+    ```bash
+    lerim status
+    lerim logs --follow
+    ```
+  </Tab>
+  
+  <Tab title="Manual (one-shot)">
+    Trigger a single sync cycle:
+    
+    ```bash
+    lerim sync
+    ```
+    
+    Sync only recent sessions:
+    
+    ```bash
+    lerim sync --max-sessions 5
+    ```
+    
+    Sync for a specific project:
+    
+    ```bash
+    lerim sync --project ~/codes/my-app
+    ```
+  </Tab>
+  
+  <Tab title="Direct (no server)">
+    Run sync directly without the server:
+    
+    ```bash
+    lerim connect auto  # detect platforms
+    python -m lerim.pipelines.sync
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+The first sync can take a while if you have many sessions. Use `--max-sessions` to limit the initial sync, then let the daemon catch up over time.
+</Info>
+
+### Sync output
+
+Each sync run creates a workspace folder with detailed artifacts:
+
+```
+<repo>/.lerim/workspace/sync-20260220-120000-abc123/
+  extract.json          # All extracted candidates
+  summary.json          # Session summary with metadata
+  memory_actions.json   # What was written (add/update/no-op)
+  agent.log            # Lead agent trace
+  subagents.log        # Explorer subagent trace
+  session.log          # Session processing log
+```
+
+Use these files for debugging extraction quality or understanding why a memory was or wasn't created.
+
+### Extraction quality
+
+The extraction pipeline is configured with role-specific models:
+
+```toml
+# ~/.lerim/config.toml
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+max_window_tokens = 300000
+window_overlap_tokens = 1000
+```
+
+<Tip>
+Use a model with a large context window for extraction (300K+). The default `openai/gpt-5-nano` via OpenRouter is optimized for cost and speed.
+</Tip>
+
+## The maintain process
+
+Maintain runs offline refinement over stored memories: merges duplicates, archives low-value entries, consolidates related memories, and applies time-based decay.
+
+### How maintain works
+
+<Steps>
+  <Step title="Scan memories">
+    Load all existing decision and learning files from `memory/decisions/` and `memory/learnings/`.
+  </Step>
+  
+  <Step title="Identify duplicates">
+    The lead agent compares memories to find near-duplicates:
+    
+    - Same primitive type
+    - Similar titles or content
+    - Overlapping tags
+  </Step>
+  
+  <Step title="Merge duplicates">
+    For each duplicate group:
+    
+    - Keep the memory with highest confidence
+    - Merge complementary information from others
+    - Move merged-from memories to `memory/archived/{primitive}/`
+  </Step>
+  
+  <Step title="Calculate effective confidence">
+    For each memory, compute effective confidence with time-based decay:
+    
+    ```python
+    days_since_access = (now - last_accessed).days
+    decay_factor = min(days_since_access / 180, 1.0)
+    effective_conf = base_confidence * (1 - decay_factor)
+    effective_conf = max(effective_conf, 0.1)  # floor
+    ```
+  </Step>
+  
+  <Step title="Archive low-value memories">
+    Memories with effective confidence below 0.2 are moved to `memory/archived/{primitive}/`, unless:
+    
+    - Accessed in the last 30 days (grace period)
+    - Created in the last 30 days
+  </Step>
+  
+  <Step title="Consolidate related memories">
+    Identify memories that reference each other or share many tags, and optionally create consolidated entries.
+  </Step>
+  
+  <Step title="Log results">
+    Maintain results are logged to:
+    
+    - `~/.lerim/activity.log`
+    - Workspace artifacts in `<repo>/.lerim/workspace/maintain-{timestamp}-{id}/`
+  </Step>
+</Steps>
+
+### Running maintain
+
+<Tabs>
+  <Tab title="Automatic (daemon)">
+    When you run `lerim up`, maintain runs periodically (default: every 24 hours):
+    
+    ```bash
+    lerim up
+    # Daemon automatically runs maintain once per day
+    ```
+  </Tab>
+  
+  <Tab title="Manual (one-shot)">
+    Trigger a single maintain cycle:
+    
+    ```bash
+    lerim maintain
+    ```
+    
+    Maintain for a specific project:
+    
+    ```bash
+    lerim maintain --project ~/codes/my-app
+    ```
+  </Tab>
+  
+  <Tab title="Direct (no server)">
+    Run maintain directly without the server:
+    
+    ```bash
+    python -m lerim.pipelines.maintain
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+Maintain is safe to run frequently — it's non-destructive (archived memories are soft-deleted, not removed).
+</Note>
+
+### Maintain output
+
+Each maintain run creates a workspace folder:
+
+```
+<repo>/.lerim/workspace/maintain-20260223-140000-xyz789/
+  maintain_actions.json  # What was merged/archived
+  agent.log             # Lead agent trace
+  subagents.log         # Explorer subagent trace
+```
+
+### Decay configuration
+
+Configure decay behavior in your config file:
+
+```toml
+# ~/.lerim/config.toml
+[memory.decay]
+decay_period_days = 180      # Full decay after 6 months
+confidence_floor = 0.1        # Never drop below this
+archive_threshold = 0.2       # Archive when below this
+grace_period_days = 30        # Recently accessed memories skip decay
+```
+
+<Tip>
+Increase `grace_period_days` if you want to protect recently used memories from archiving. Decrease `archive_threshold` to be more aggressive about cleaning up low-value memories.
+</Tip>
+
+## When to use each command
+
+### Use sync when:
+
+- You've completed coding sessions and want to extract learnings immediately
+- You're setting up Lerim for the first time (`lerim sync --max-sessions 5`)
+- You've manually added sessions to an agent's storage directory
+- You want to force-reprocess a specific session
+
+### Use maintain when:
+
+- You notice duplicate memories in the dashboard or search results
+- You want to clean up old, unused memories
+- You've accumulated hundreds of memories and want to consolidate them
+- You're preparing to share a project's `.lerim/` directory with a team
+
+### Use the daemon (lerim up) when:
+
+- You want continuous, automatic memory extraction and refinement
+- You're actively using coding agents and want minimal manual intervention
+- You want the dashboard running for browsing memories and sessions
+
+## Workflow examples
+
+### First-time setup
+
+```bash
+# Install and configure
+pip install lerim
+lerim init
+lerim project add .
+
+# Sync recent sessions only
+lerim up
+lerim sync --max-sessions 5
+
+# Let daemon handle future sessions
+lerim logs --follow
+```
+
+### Manual extraction cycle
+
+```bash
+# Connect platforms
+lerim connect auto
+
+# One-shot sync
+lerim sync
+
+# Clean up duplicates
+lerim maintain
+
+# Query memories
+lerim ask "What auth approach did we choose?"
+```
+
+### Debugging extraction quality
+
+```bash
+# Run sync with verbose logging
+LERIM_TRACING=1 lerim sync --max-sessions 1
+
+# Check workspace artifacts
+ls -la .lerim/workspace/sync-*/
+cat .lerim/workspace/sync-*/extract.json | jq
+
+# View agent trace
+cat .lerim/workspace/sync-*/agent.log
+```
+
+### Clean slate reset
+
+```bash
+# Reset everything
+lerim memory reset --scope both --yes
+
+# Re-sync from scratch
+lerim sync --max-sessions 10
+
+# Run maintain to deduplicate
+lerim maintain
+```
+
+## Performance tuning
+
+### Sync performance
+
+<AccordionGroup>
+  <Accordion title="Use hash-based change detection">
+    Lerim automatically skips sessions that haven't changed since the last sync. Content hashes are stored in `sessions.sqlite3`.
+    
+    If you're re-syncing the same sessions repeatedly, make sure your session files are stable (not being rewritten by the agent).
+  </Accordion>
+  
+  <Accordion title="Reduce window size for faster extraction">
+    Large context windows are more accurate but slower. Reduce `max_window_tokens` for faster sync:
+    
+    ```toml
+    [roles.extract]
+    max_window_tokens = 150000  # Half the default
+    ```
+  </Accordion>
+  
+  <Accordion title="Use faster models">
+    Trade accuracy for speed by using faster models:
+    
+    ```toml
+    [roles.extract]
+    provider = "openrouter"
+    model = "openai/gpt-4o-mini"  # Much faster than gpt-5-nano
+    ```
+  </Accordion>
+  
+  <Accordion title="Limit max sessions per sync">
+    If you have thousands of sessions, process them in batches:
+    
+    ```bash
+    lerim sync --max-sessions 50
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Maintain performance
+
+<AccordionGroup>
+  <Accordion title="Run maintain less frequently">
+    If you have a large memory store, reduce maintain frequency:
+    
+    ```toml
+    [daemon]
+    maintain_interval_hours = 168  # Once per week instead of daily
+    ```
+  </Accordion>
+  
+  <Accordion title="Archive aggressively">
+    Reduce the memory set size by lowering the archive threshold:
+    
+    ```toml
+    [memory.decay]
+    archive_threshold = 0.15  # Archive more aggressively
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Observability
+
+Both sync and maintain emit detailed traces when tracing is enabled:
+
+```bash
+# Enable tracing
+export LERIM_TRACING=1
+
+# Or in config
+# ~/.lerim/config.toml
+[tracing]
+enabled = true
+include_content = true
+```
+
+View traces at [logfire.pydantic.dev](https://logfire.pydantic.dev) to see:
+
+- Model calls and token usage
+- Tool calls and results
+- Agent reasoning steps
+- Timing and latency
+- LLM costs per operation
+
+<Tip>
+Tracing is invaluable for debugging extraction quality. If a memory wasn't created or was incorrectly merged, the trace shows exactly why.
+</Tip>
+
+## What's next?
+
+<CardGroup cols={2}>
+  <Card title="Supported agents" icon="robot" href="/concepts/supported-agents">
+    Learn which coding agents are supported and how to connect them
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure models, roles, decay, and daemon behavior
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/cli/overview">
+    Explore all sync and maintain CLI options
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/connecting-agents#troubleshooting">
+    Debug common sync and maintain issues
+  </Card>
+</CardGroup>

@@ -1,0 +1,555 @@
+---
+title: Config.toml reference
+description: Complete reference for all Lerim configuration options
+---
+
+This page documents every configuration option available in Lerim's TOML files. See the [configuration overview](/configuration/overview) to understand how the layered config system works.
+
+## Data directories
+
+### [data]
+
+Controls where Lerim stores its data.
+
+<ParamField path="dir" type="string" default="~/.lerim">
+  Global data directory path. Used for:
+  - User config (`config.toml`)
+  - Global memory store
+  - Session database
+  - Platform configuration
+</ParamField>
+
+**Example:**
+
+```toml
+[data]
+dir = "~/.lerim"
+```
+
+## Memory settings
+
+### [memory]
+
+Controls memory scope and storage behavior.
+
+<ParamField path="scope" type="string" default="project_fallback_global">
+  Memory read/write scope. Determines where Lerim looks for and stores memories.
+  
+  **Options:**
+  - `project_fallback_global` — Read from project first, fall back to global. Write to project. (recommended)
+  - `project_only` — Read and write only in `<repo>/.lerim/`
+  - `global_only` — Read and write only in `~/.lerim/`
+</ParamField>
+
+<ParamField path="project_dir_name" type="string" default=".lerim">
+  Name of the project memory directory inside repositories.
+</ParamField>
+
+**Example:**
+
+```toml
+[memory]
+scope = "project_fallback_global"
+project_dir_name = ".lerim"
+```
+
+<Info>
+Use `project_fallback_global` to keep project-specific memories in the repo while still having access to global learnings. Use `project_only` for strict project isolation.
+</Info>
+
+### [memory.decay]
+
+Controls automatic confidence decay for memories.
+
+<ParamField path="enabled" type="boolean" default="true">
+  Enable time-based memory decay. When enabled, memories that haven't been accessed lose confidence over time.
+</ParamField>
+
+<ParamField path="decay_days" type="integer" default="180">
+  Number of days of no access before full decay. Memories decay gradually from last access to this threshold.
+</ParamField>
+
+<ParamField path="min_confidence_floor" type="float" default="0.1">
+  Minimum confidence multiplier. Decay never drops confidence below this value (0.0-1.0).
+</ParamField>
+
+<ParamField path="archive_threshold" type="float" default="0.2">
+  Effective confidence threshold for archiving. Memories with confidence below this value become archive candidates during `maintain` (0.0-1.0).
+</ParamField>
+
+<ParamField path="recent_access_grace_days" type="integer" default="30">
+  Grace period in days. Memories accessed within this window skip archiving even if confidence is below threshold.
+</ParamField>
+
+**Example:**
+
+```toml
+[memory.decay]
+enabled = true
+decay_days = 180
+min_confidence_floor = 0.1
+archive_threshold = 0.2
+recent_access_grace_days = 30
+```
+
+<Accordion title="How memory decay works">
+Memory decay keeps your knowledge store relevant by automatically reducing confidence for unused memories:
+
+1. Each memory tracks `last_accessed` timestamp
+2. Confidence decays linearly from `last_accessed` to `last_accessed + decay_days`
+3. Decay multiplier is clamped to `min_confidence_floor` (never goes below 10% by default)
+4. Effective confidence = `base_confidence * decay_multiplier`
+5. During `maintain`, memories with effective confidence below `archive_threshold` are archived
+6. Recently accessed memories (within `recent_access_grace_days`) are protected from archiving
+
+This ensures that:
+- Frequently used knowledge stays strong
+- Stale information gradually fades
+- Critical decisions don't disappear (floor prevents total decay)
+- Recent memories aren't archived prematurely
+</Accordion>
+
+## Server settings
+
+### [server]
+
+Controls the daemon server and sync/maintain intervals.
+
+<ParamField path="host" type="string" default="127.0.0.1">
+  Server bind address. Use `127.0.0.1` for local-only access or `0.0.0.0` to allow network access.
+</ParamField>
+
+<ParamField path="port" type="integer" default="8765">
+  Server port for HTTP API and dashboard.
+</ParamField>
+
+<ParamField path="sync_interval_minutes" type="integer" default="10">
+  How often the sync (hot) path runs. Sync indexes new sessions and extracts memories.
+</ParamField>
+
+<ParamField path="maintain_interval_minutes" type="integer" default="60">
+  How often the maintain (cold) path runs. Maintain merges duplicates, archives stale entries, and applies decay.
+</ParamField>
+
+<ParamField path="sync_window_days" type="integer" default="7">
+  How many days back to scan for new sessions during sync.
+</ParamField>
+
+<ParamField path="sync_max_sessions" type="integer" default="50">
+  Maximum number of sessions to process in a single sync run.
+</ParamField>
+
+**Example:**
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 8765
+sync_interval_minutes = 10
+maintain_interval_minutes = 60
+sync_window_days = 7
+sync_max_sessions = 50
+```
+
+<Note>
+The daemon runs two independent loops: `sync` (hot path, frequent) and `maintain` (cold path, less frequent). Adjust intervals based on how actively you use your coding agents.
+</Note>
+
+## Model roles
+
+Lerim uses four model roles, each independently configurable. See the [model roles guide](/configuration/model-roles) for detailed explanation.
+
+### [roles.lead]
+
+Orchestrates chat, sync, and maintain flows using PydanticAI.
+
+<ParamField path="provider" type="string" default="openrouter">
+  Provider name: `openrouter`, `openai`, `zai`, `anthropic`, `ollama`
+</ParamField>
+
+<ParamField path="model" type="string" default="x-ai/grok-4.1-fast">
+  Model identifier for the provider.
+</ParamField>
+
+<ParamField path="api_base" type="string" default="">
+  Custom API base URL. Overrides the provider default.
+</ParamField>
+
+<ParamField path="fallback_models" type="array" default="[]">
+  List of fallback models to try if primary model fails.
+</ParamField>
+
+<ParamField path="timeout_seconds" type="integer" default="300">
+  Request timeout in seconds.
+</ParamField>
+
+<ParamField path="max_iterations" type="integer" default="10">
+  Maximum agent iterations per run.
+</ParamField>
+
+<ParamField path="openrouter_provider_order" type="array" default="[]">
+  OpenRouter provider routing preference (e.g., `["Together", "Lepton"]`).
+</ParamField>
+
+**Example:**
+
+```toml
+[roles.lead]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+api_base = ""
+fallback_models = []
+timeout_seconds = 300
+max_iterations = 10
+openrouter_provider_order = []
+```
+
+### [roles.explorer]
+
+Read-only subagent for candidate gathering.
+
+<ParamField path="provider" type="string" default="openrouter">
+  Provider name.
+</ParamField>
+
+<ParamField path="model" type="string" default="x-ai/grok-4.1-fast">
+  Model identifier.
+</ParamField>
+
+<ParamField path="api_base" type="string" default="">
+  Custom API base URL.
+</ParamField>
+
+<ParamField path="fallback_models" type="array" default="[]">
+  List of fallback models.
+</ParamField>
+
+<ParamField path="timeout_seconds" type="integer" default="180">
+  Request timeout in seconds.
+</ParamField>
+
+<ParamField path="max_iterations" type="integer" default="8">
+  Maximum agent iterations.
+</ParamField>
+
+<ParamField path="openrouter_provider_order" type="array" default="[]">
+  OpenRouter provider routing preference.
+</ParamField>
+
+**Example:**
+
+```toml
+[roles.explorer]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+api_base = ""
+fallback_models = []
+timeout_seconds = 180
+max_iterations = 8
+openrouter_provider_order = []
+```
+
+### [roles.extract]
+
+DSPy extraction pipeline for identifying decisions and learnings.
+
+<ParamField path="provider" type="string" default="openrouter">
+  Provider name.
+</ParamField>
+
+<ParamField path="model" type="string" default="openai/gpt-5-nano">
+  Model identifier.
+</ParamField>
+
+<ParamField path="api_base" type="string" default="">
+  Custom API base URL.
+</ParamField>
+
+<ParamField path="fallback_models" type="array" default='["x-ai/grok-4.1-fast"]'>
+  List of fallback models.
+</ParamField>
+
+<ParamField path="timeout_seconds" type="integer" default="180">
+  Request timeout in seconds.
+</ParamField>
+
+<ParamField path="max_window_tokens" type="integer" default="300000">
+  Maximum tokens per transcript window. Increase for large-context models.
+</ParamField>
+
+<ParamField path="window_overlap_tokens" type="integer" default="5000">
+  Token overlap between consecutive windows.
+</ParamField>
+
+<ParamField path="openrouter_provider_order" type="array" default="[]">
+  OpenRouter provider routing preference.
+</ParamField>
+
+**Example:**
+
+```toml
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+api_base = ""
+fallback_models = ["x-ai/grok-4.1-fast"]
+timeout_seconds = 180
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+openrouter_provider_order = []
+```
+
+<Warning>
+The `max_window_tokens` setting is critical for extraction quality. If your sessions are long, increase this value or use a model with a larger context window.
+</Warning>
+
+### [roles.summarize]
+
+DSPy summarization pipeline for session summaries.
+
+<ParamField path="provider" type="string" default="openrouter">
+  Provider name.
+</ParamField>
+
+<ParamField path="model" type="string" default="openai/gpt-5-nano">
+  Model identifier.
+</ParamField>
+
+<ParamField path="api_base" type="string" default="">
+  Custom API base URL.
+</ParamField>
+
+<ParamField path="fallback_models" type="array" default='["x-ai/grok-4.1-fast"]'>
+  List of fallback models.
+</ParamField>
+
+<ParamField path="timeout_seconds" type="integer" default="180">
+  Request timeout in seconds.
+</ParamField>
+
+<ParamField path="max_window_tokens" type="integer" default="300000">
+  Maximum tokens per transcript window.
+</ParamField>
+
+<ParamField path="window_overlap_tokens" type="integer" default="5000">
+  Token overlap between windows.
+</ParamField>
+
+<ParamField path="openrouter_provider_order" type="array" default="[]">
+  OpenRouter provider routing preference.
+</ParamField>
+
+**Example:**
+
+```toml
+[roles.summarize]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+api_base = ""
+fallback_models = ["x-ai/grok-4.1-fast"]
+timeout_seconds = 180
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+openrouter_provider_order = []
+```
+
+## Provider API bases
+
+### [providers]
+
+Default API base URLs per provider. Per-role `api_base` settings take precedence.
+
+<ParamField path="zai" type="string" default="https://api.z.ai/api/paas/v4">
+  ZAI API base URL.
+</ParamField>
+
+<ParamField path="openai" type="string" default="https://api.openai.com/v1">
+  OpenAI API base URL.
+</ParamField>
+
+<ParamField path="openrouter" type="string" default="https://openrouter.ai/api/v1">
+  OpenRouter API base URL.
+</ParamField>
+
+<ParamField path="ollama" type="string" default="http://127.0.0.1:11434">
+  Ollama API base URL.
+</ParamField>
+
+**Example:**
+
+```toml
+[providers]
+zai = "https://api.z.ai/api/paas/v4"
+openai = "https://api.openai.com/v1"
+openrouter = "https://openrouter.ai/api/v1"
+ollama = "http://127.0.0.1:11434"
+```
+
+<Info>
+You can point all roles at a custom endpoint by changing the provider base URL here, or override on a per-role basis using `[roles.*.api_base]`.
+</Info>
+
+## Tracing
+
+### [tracing]
+
+OpenTelemetry tracing settings. See the [tracing guide](/configuration/tracing) for setup instructions.
+
+<ParamField path="enabled" type="boolean" default="false">
+  Enable OpenTelemetry tracing. Can also be enabled with `LERIM_TRACING=1`.
+</ParamField>
+
+<ParamField path="include_httpx" type="boolean" default="false">
+  Capture raw HTTP request/response bodies in traces.
+</ParamField>
+
+<ParamField path="include_content" type="boolean" default="true">
+  Include prompt and completion text in trace spans.
+</ParamField>
+
+**Example:**
+
+```toml
+[tracing]
+enabled = false
+include_httpx = false
+include_content = true
+```
+
+## Agents and projects
+
+### [agents]
+
+Connected coding agent platforms. Written by `lerim init` and `lerim connect`.
+
+**Example:**
+
+```toml
+[agents]
+claude = "~/.claude/projects"
+codex = "~/.codex/sessions"
+cursor = "~/Library/Application Support/Cursor/User/globalStorage"
+opencode = "~/.local/share/opencode"
+```
+
+Each key is the agent name, and the value is the path to its session storage directory.
+
+### [projects]
+
+Registered project paths. Written by `lerim project add`.
+
+**Example:**
+
+```toml
+[projects]
+my-app = "~/codes/my-app"
+backend = "~/work/backend"
+frontend = "~/codes/frontend"
+```
+
+Each key is a short project name, and the value is the absolute path to the repository.
+
+<Note>
+When running in Docker (`lerim up`), these paths determine the volume mounts. Adding or removing a project restarts the container to update mounts.
+</Note>
+
+## Complete example config
+
+Here's a complete example showing all sections:
+
+<CodeGroup>
+```toml User config (~/.lerim/config.toml)
+# Lerim user configuration
+
+[data]
+dir = "~/.lerim"
+
+[memory]
+scope = "project_fallback_global"
+project_dir_name = ".lerim"
+
+[memory.decay]
+enabled = true
+decay_days = 180
+min_confidence_floor = 0.1
+archive_threshold = 0.2
+recent_access_grace_days = 30
+
+[server]
+host = "127.0.0.1"
+port = 8765
+sync_interval_minutes = 10
+maintain_interval_minutes = 60
+sync_window_days = 7
+sync_max_sessions = 50
+
+[roles.lead]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+api_base = ""
+fallback_models = []
+timeout_seconds = 300
+max_iterations = 10
+openrouter_provider_order = []
+
+[roles.explorer]
+provider = "openrouter"
+model = "x-ai/grok-4.1-fast"
+api_base = ""
+fallback_models = []
+timeout_seconds = 180
+max_iterations = 8
+openrouter_provider_order = []
+
+[roles.extract]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+api_base = ""
+fallback_models = ["x-ai/grok-4.1-fast"]
+timeout_seconds = 180
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+openrouter_provider_order = []
+
+[roles.summarize]
+provider = "openrouter"
+model = "openai/gpt-5-nano"
+api_base = ""
+fallback_models = ["x-ai/grok-4.1-fast"]
+timeout_seconds = 180
+max_window_tokens = 300000
+window_overlap_tokens = 5000
+openrouter_provider_order = []
+
+[providers]
+zai = "https://api.z.ai/api/paas/v4"
+openai = "https://api.openai.com/v1"
+openrouter = "https://openrouter.ai/api/v1"
+ollama = "http://127.0.0.1:11434"
+
+[tracing]
+enabled = false
+include_httpx = false
+include_content = true
+
+[agents]
+claude = "~/.claude/projects"
+codex = "~/.codex/sessions"
+opencode = "~/.local/share/opencode"
+
+[projects]
+my-app = "~/codes/my-app"
+backend = "~/work/backend"
+```
+
+```toml Project config (<repo>/.lerim/config.toml)
+# Lerim project overrides
+# Only set what this repo needs
+
+[memory]
+scope = "project_only"
+
+[roles.lead]
+model = "openai/gpt-4o"
+```
+</CodeGroup>

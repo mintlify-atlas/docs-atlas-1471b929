@@ -1,0 +1,342 @@
+---
+title: Dashboard
+description: Browse sessions, search memories, and monitor Lerim status through the web interface
+---
+
+Lerim includes a local web dashboard for session analytics, memory browsing, and runtime status. The dashboard runs alongside the daemon and API server.
+
+## Accessing the dashboard
+
+When running via Docker (recommended), the dashboard is automatically available:
+
+```bash
+lerim up
+# Dashboard at http://localhost:8765
+```
+
+Or run standalone without Docker:
+
+```bash
+lerim serve
+# Then open http://127.0.0.1:8765
+```
+
+<Tip>
+The dashboard is served by `lerim serve` (or `lerim up` for Docker). No separate server needs to be started.
+</Tip>
+
+### Get the URL
+
+Print the dashboard URL:
+
+```bash
+lerim dashboard
+```
+
+Output:
+
+```
+Dashboard: http://localhost:8765
+The dashboard is served by `lerim serve` (or `lerim up` for Docker).
+```
+
+### Custom host and port
+
+Change the bind address in your config (`~/.lerim/config.toml`):
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 9000
+```
+
+Or override when starting:
+
+```bash
+lerim serve --host 0.0.0.0 --port 9000
+```
+
+Then access at: `http://localhost:9000`
+
+## Dashboard tabs
+
+The dashboard has five main sections:
+
+### Overview
+
+High-level metrics and charts showing:
+
+- **Sessions processed** — Total agent conversations indexed
+- **Messages exchanged** — User and assistant messages across all sessions
+- **Tools called** — Agent tool invocations (file reads, commands, etc.)
+- **Errors encountered** — Extraction failures and runtime errors
+- **Token usage breakdown** — Tokens consumed by model and role
+- **Activity by day and hour** — Session frequency heatmaps
+- **Model usage distribution** — Which LLMs are being used (OpenRouter, OpenAI, Anthropic)
+
+<Note>
+Metrics update in real-time as new sessions are synced and memories are extracted.
+</Note>
+
+### Runs
+
+Searchable session list (50 per page) with status and metadata:
+
+- Session run ID
+- Coding agent (Claude Code, Cursor, Codex, OpenCode)
+- Timestamp
+- Status (processed, failed, queued)
+- Message count
+- Project association
+
+**Click any run** to open a full-screen chat viewer showing the complete conversation.
+
+<CodeGroup>
+```plaintext Filter by agent
+Agent: Claude Code ▼
+```
+
+```plaintext Filter by scope
+Scope: Project ▼
+```
+</CodeGroup>
+
+Filters apply to the session list and update dynamically.
+
+### Memories
+
+Library and editor for memory records:
+
+- **Browse all memories** — Decisions and learnings extracted from sessions
+- **Filter by type** — Decision or learning
+- **Filter by tags** — Tags assigned during extraction
+- **Filter by confidence** — Confidence score (0.0 to 1.0)
+- **Inspect individual memories** — View full content with frontmatter
+- **Edit memories** — Modify title, body, kind, confidence, and tags directly
+
+#### Memory card example
+
+```
+📋 Decision: Auth pattern - bearer tokens
+Confidence: 0.9 | Tags: auth, api, security
+Created: 2026-02-15 | Source: claude-abc123
+
+We chose bearer tokens over session cookies because our API is stateless.
+JWTs are issued on login with a 7-day expiration.
+
+[Edit] [View File] [Archive]
+```
+
+<Warning>
+Edits in the dashboard modify the underlying markdown files. Changes are saved to disk immediately.
+</Warning>
+
+### Pipeline
+
+Sync and maintain status:
+
+- **Extraction queue state** — Sessions pending, processing, or completed
+- **Latest extraction report** — Summary of last sync run
+  - Sessions indexed
+  - Memories extracted
+  - Errors encountered
+- **Recent sync timestamps** — When sync last ran and next scheduled run
+- **Recent maintain timestamps** — When maintenance last ran
+
+#### Queue status example
+
+```
+Queue:
+- Pending: 5
+- Processing: 1
+- Completed: 147
+
+Last sync: 2 minutes ago
+Next sync: in 8 minutes
+
+Last maintain: 15 minutes ago
+Next maintain: in 45 minutes
+```
+
+<Tip>
+The Pipeline tab is useful for troubleshooting sync issues or monitoring extraction progress.
+</Tip>
+
+### Settings
+
+Dashboard-editable configuration:
+
+- **Server settings** — Poll interval, sync window, max sessions
+- **Model role configuration** — Which LLMs to use for extraction, synthesis, etc.
+- **Tracing toggle** — Enable OpenTelemetry tracing for debugging
+
+Changes are **saved to `~/.lerim/config.toml`** immediately.
+
+#### Example settings
+
+```toml
+[daemon]
+sync_interval_minutes = 10
+maintain_interval_minutes = 60
+sync_window_days = 7
+sync_max_sessions = 50
+
+[models]
+lead.provider = "openrouter"
+lead.model = "x-ai/grok-4.1-fast"
+
+extract.provider = "openrouter"
+extract.model = "openai/gpt-5-nano"
+
+[tracing]
+enabled = false
+```
+
+<Note>
+Changes to config require a server restart to take effect:
+```bash
+lerim down
+lerim up
+```
+</Note>
+
+## Top bar filters
+
+The dashboard includes global filters in the top bar:
+
+- **Agent filter** — Show data for specific platforms (Claude, Codex, Cursor, OpenCode)
+- **Scope filter** — Switch between project-level and global data
+
+These filters update:
+- Overview metrics and charts
+- Run listings in the Runs tab
+- Memory counts in the Memories tab
+
+## HTTP API
+
+The dashboard is built on top of Lerim's JSON API. Key endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Healthcheck for container monitoring |
+| `/api/status` | GET | Runtime state (agents, memory count, queue) |
+| `/api/ask` | POST | LLM-synthesized query |
+| `/api/sync` | POST | Trigger sync cycle |
+| `/api/maintain` | POST | Trigger maintenance |
+| `/api/memories` | GET | List all memories |
+| `/api/search` | POST | Keyword search memories |
+
+You can query these endpoints directly:
+
+```bash
+curl http://localhost:8765/api/status | jq
+curl -X POST http://localhost:8765/api/sync -H "Content-Type: application/json" -d '{"force": false}'
+```
+
+<Tip>
+The thin CLI commands (`lerim ask`, `lerim sync`, etc.) are HTTP clients that forward to these endpoints.
+</Tip>
+
+## Dashboard features
+
+### Session chat viewer
+
+Click any session in the **Runs** tab to open a full-screen viewer:
+
+- Complete conversation history
+- User and assistant messages
+- Tool calls and results
+- Timestamps and metadata
+- Syntax highlighting for code blocks
+
+### Memory editor
+
+From the **Memories** tab, click **[Edit]** on any memory:
+
+- Edit title
+- Edit body (markdown supported)
+- Change primitive type (decision/learning)
+- Adjust confidence score
+- Modify tags
+- Update kind (insight, procedure, friction, pitfall, preference)
+
+Changes save to the markdown file immediately.
+
+### Live metrics
+
+The **Overview** tab shows live metrics:
+
+- Total sessions indexed
+- Messages per day
+- Token usage by model
+- Activity heatmaps
+
+Metrics refresh when you navigate between tabs or apply filters.
+
+## Notes and limitations
+
+- The dashboard is **read-only for run content** — you can view sessions but not modify them
+- Memory edits go through the **Memories tab edit interface**
+- **Graph Explorer** code exists in the project but is currently hidden in the UI
+- When running via Docker, the dashboard is served by the `lerim serve` process alongside the daemon loop and HTTP API
+
+## Troubleshooting
+
+<Accordion title="Dashboard not loading">
+  The server might not be running.
+
+  **Solution:** Start Lerim:
+  ```bash
+  lerim up        # Docker
+  lerim serve     # Native
+  ```
+
+  Check status:
+  ```bash
+  lerim status
+  ```
+
+  If it's running, verify the port:
+  ```bash
+  lerim dashboard
+  ```
+</Accordion>
+
+<Accordion title="Empty metrics">
+  No sessions have been synced yet.
+
+  **Solution:** Run an initial sync:
+  ```bash
+  lerim sync
+  ```
+
+  Or wait for the automatic daemon cycle (default: every 10 minutes).
+</Accordion>
+
+<Accordion title="Changes not appearing">
+  The dashboard may need a refresh to show updates.
+
+  **Solution:** Refresh the page or navigate between tabs to force a data reload.
+</Accordion>
+
+<Accordion title="Port conflict">
+  Another service is using port 8765.
+
+  **Solution:** Change the port in config:
+  ```toml
+  [server]
+  port = 9000
+  ```
+
+  Then restart:
+  ```bash
+  lerim down
+  lerim up
+  ```
+</Accordion>
+
+## Next steps
+
+- Query memories from CLI: [Querying memories guide](/guides/querying-memories)
+- Learn about [Docker workflow](/guides/docker-workflow) for always-on operation
+- Read the [CLI reference](/cli/overview) for all available commands

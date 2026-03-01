@@ -1,0 +1,205 @@
+---
+title: CLI overview
+description: Global flags, exit codes, and common patterns for Lerim CLI
+---
+
+The Lerim CLI is the primary interface for managing Lerim's continual learning layer. Commands fall into two categories:
+
+- **Host-only commands** run locally and never require a server (`init`, `project`, `up`, `down`, `logs`, `connect`, `memory`)
+- **Service commands** are HTTP clients that require a running Lerim server started via `lerim up` or `lerim serve` (`ask`, `sync`, `maintain`, `status`)
+
+## Installation
+
+```bash
+pip install lerim
+```
+
+**Prerequisites:** Python 3.10+, [Docker](https://docs.docker.com/get-docker/) (optional)
+
+## Quick start
+
+```bash
+lerim init                     # interactive setup — detects your coding agents
+lerim project add .            # add current project
+lerim up                       # start Lerim Docker service
+lerim ask "your question"      # query memories
+```
+
+## Global flags
+
+These flags work with most commands:
+
+<ParamField path="--json" type="boolean">
+  Emit structured JSON instead of human-readable text. Works with `status`, `memory list`, `project list`, and more.
+
+  ```bash
+  lerim status --json
+  lerim memory list --json
+  ```
+</ParamField>
+
+<ParamField path="--version" type="boolean">
+  Show Lerim version and exit.
+
+  ```bash
+  lerim --version
+  ```
+</ParamField>
+
+<Note>
+The `--json` flag can appear before or after the subcommand. Both `lerim --json status` and `lerim status --json` work.
+</Note>
+
+## Exit codes
+
+Lerim commands return standard exit codes:
+
+| Code | Meaning | Example |
+|------|---------|----------|
+| `0` | Success | Command completed without errors |
+| `1` | Runtime failure | Server not reachable, file not found, API error |
+| `2` | Usage error | Invalid arguments, missing required parameters |
+| `3` | Partial success | Some operations succeeded, others failed |
+| `4` | Lock busy | Another process holds the sync/maintain lock |
+
+## Command categories
+
+### Setup and project management
+
+- [`lerim init`](/cli/init) - Interactive setup wizard
+- [`lerim project add`](/cli/project) - Register a project directory
+- [`lerim project list`](/cli/project) - List registered projects
+- [`lerim project remove`](/cli/project) - Unregister a project
+
+### Service lifecycle
+
+- [`lerim up`](/cli/up-down-logs) - Start Docker container
+- [`lerim down`](/cli/up-down-logs) - Stop Docker container
+- [`lerim logs`](/cli/up-down-logs) - View container logs
+- `lerim serve` - Run HTTP server + daemon (Docker entrypoint)
+
+### Memory operations
+
+- [`lerim sync`](/cli/sync) - Index sessions and extract memories (hot path)
+- [`lerim maintain`](/cli/maintain) - Refine existing memories (cold path)
+- `lerim daemon` - Run continuous sync + maintain loop
+- `lerim ask` - Query memories with natural language
+
+### Platform connections
+
+- [`lerim connect`](/cli/connect) - Manage agent platform connections
+- [`lerim connect auto`](/cli/connect) - Auto-detect and connect all platforms
+- [`lerim connect list`](/cli/connect) - Show connected platforms
+
+### Direct memory access
+
+- `lerim memory search` - Full-text search across memories
+- `lerim memory list` - List recent memory items
+- `lerim memory add` - Manually create a memory
+- `lerim memory reset` - Destructive wipe of memory data
+
+### Runtime status
+
+- `lerim status` - Show runtime state
+- `lerim dashboard` - Show dashboard URL
+
+## Common patterns
+
+### First-time setup
+
+```bash
+lerim init                     # configure agents
+lerim project add ~/codes/app  # register projects
+lerim up                       # start service
+lerim connect auto             # connect platforms
+lerim sync                     # initial sync
+```
+
+### Daily workflow
+
+```bash
+# Query before starting work
+lerim ask "What auth pattern are we using?"
+
+# After coding sessions, sync manually if needed
+lerim sync --window 24h
+
+# Check status
+lerim status
+```
+
+### Troubleshooting
+
+```bash
+# Check if server is running
+lerim status
+
+# View logs
+lerim logs --follow
+
+# Restart service
+lerim down && lerim up
+
+# Preview sync without writing
+lerim sync --dry-run
+```
+
+### Fresh start
+
+```bash
+# Destructive reset (requires --yes flag)
+lerim memory reset --yes
+
+# Re-sync recent sessions
+lerim sync --max-sessions 10
+```
+
+<Warning>
+`lerim memory reset --yes` permanently deletes all memories, workspace data, and session indexes. This cannot be undone.
+</Warning>
+
+## Running without Docker
+
+If you prefer not to use Docker, run Lerim directly:
+
+```bash
+lerim connect auto    # detect platforms
+lerim serve &         # start server in background
+lerim sync            # manual sync
+lerim maintain        # manual maintain
+
+# Or run daemon loop
+lerim daemon          # continuous sync + maintain
+```
+
+## Configuration
+
+Lerim uses TOML-layered configuration (lowest to highest priority):
+
+1. `src/lerim/config/default.toml` - Shipped defaults
+2. `~/.lerim/config.toml` - User global config
+3. `<repo>/.lerim/config.toml` - Project overrides
+4. `LERIM_CONFIG` env var - Explicit override path
+
+API keys come from environment variables:
+- `OPENROUTER_API_KEY` (required for default models)
+- `OPENAI_API_KEY` (optional)
+- `ANTHROPIC_API_KEY` (optional)
+- `ZAI_API_KEY` (optional)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Initialize Lerim" icon="play" href="/cli/init">
+    Run the interactive setup wizard
+  </Card>
+  <Card title="Manage projects" icon="folder" href="/cli/project">
+    Register and track your repositories
+  </Card>
+  <Card title="Connect platforms" icon="link" href="/cli/connect">
+    Link your coding agents
+  </Card>
+  <Card title="Sync sessions" icon="sync" href="/cli/sync">
+    Extract memories from agent sessions
+  </Card>
+</CardGroup>

@@ -1,0 +1,215 @@
+---
+title: Connecting agents
+description: Connect coding agent platforms to Lerim for persistent memory
+---
+
+Lerim ingests session transcripts from your coding agents to extract decisions and learnings. The `lerim connect` command registers agent platforms so Lerim knows where to find their sessions.
+
+## Supported platforms
+
+Lerim currently supports these coding agents:
+
+| Platform | Session store | Format |
+|----------|--------------|--------|
+| **Claude Code** | `~/.claude/projects/` | JSONL files |
+| **Codex CLI** | `~/.codex/sessions/` | JSONL files |
+| **Cursor** | `~/Library/Application Support/Cursor/User/globalStorage/` (macOS) | SQLite `state.vscdb`, exported to JSONL cache |
+| **OpenCode** | `~/.local/share/opencode/` | SQLite `opencode.db`, exported to JSONL cache |
+
+<Note>
+More agents are coming soon. Check the [GitHub repository](https://github.com/lerim-dev/lerim-cli) for adapter contributions.
+</Note>
+
+## Auto-connect all platforms
+
+The fastest way to get started is to let Lerim auto-detect all installed agents:
+
+```bash
+lerim connect auto
+```
+
+This scans for known platforms at their default locations and connects any that exist on your system. You'll see output like:
+
+```
+Auto connected: 3
+```
+
+## Connect specific platforms
+
+You can connect platforms individually:
+
+<CodeGroup>
+```bash Claude Code
+lerim connect claude
+```
+
+```bash Codex CLI
+lerim connect codex
+```
+
+```bash Cursor
+lerim connect cursor
+```
+
+```bash OpenCode
+lerim connect opencode
+```
+</CodeGroup>
+
+After connecting, you'll see confirmation:
+
+```
+Connected: claude
+- Path: /Users/you/.claude/projects
+- Sessions: 42
+```
+
+## Custom session paths
+
+If your agent stores sessions in a non-default location, use the `--path` flag:
+
+<Steps>
+  <Step title="Find your session directory">
+    Locate where your agent stores its session data. This varies by platform and configuration.
+  </Step>
+
+  <Step title="Connect with custom path">
+    ```bash
+    lerim connect claude --path /custom/path/to/claude/sessions
+    lerim connect cursor --path ~/my-cursor-data/globalStorage
+    ```
+  </Step>
+
+  <Step title="Verify connection">
+    Check that Lerim found sessions:
+    ```bash
+    lerim connect list
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+The path is expanded (`~` resolves to your home directory) and must exist on disk. This overrides the auto-detected default for that platform.
+</Tip>
+
+## Managing connections
+
+### List connected platforms
+
+View all currently connected platforms:
+
+```bash
+lerim connect list
+```
+
+Output includes session count and path status:
+
+```
+Connected platforms: 3
+- claude: /Users/you/.claude/projects (42 sessions, ok)
+- codex: /Users/you/.codex/sessions (18 sessions, ok)
+- cursor: /Users/you/Library/Application Support/Cursor/User/globalStorage (105 sessions, ok)
+```
+
+### Disconnect a platform
+
+Remove a platform connection:
+
+```bash
+lerim connect remove claude
+```
+
+<Warning>
+Disconnecting a platform stops Lerim from syncing new sessions, but doesn't delete existing memories extracted from that platform.
+</Warning>
+
+## Connection workflow
+
+Here's the complete flow for connecting agents:
+
+<Steps>
+  <Step title="Run init wizard">
+    Start with the interactive setup:
+    ```bash
+    lerim init
+    ```
+    This detects installed agents and writes your initial config to `~/.lerim/config.toml`.
+  </Step>
+
+  <Step title="Connect additional platforms">
+    If you install new agents later, connect them:
+    ```bash
+    lerim connect auto
+    ```
+    Or connect specific platforms individually.
+  </Step>
+
+  <Step title="Verify connections">
+    Check that all platforms are connected:
+    ```bash
+    lerim connect list
+    ```
+  </Step>
+
+  <Step title="Start syncing">
+    Once platforms are connected, start Lerim to begin extracting memories:
+    ```bash
+    lerim up
+    ```
+  </Step>
+</Steps>
+
+## Session discovery
+
+When you connect a platform:
+
+1. Lerim validates the path exists
+2. Scans for session files in the expected format
+3. Reports the number of sessions found
+4. Stores the connection in `~/.lerim/config.toml`
+
+For **JSONL platforms** (Claude Code, Codex), Lerim reads files directly. For **SQLite platforms** (Cursor, OpenCode), Lerim exports sessions to a JSONL cache for processing.
+
+## Troubleshooting
+
+<Accordion title="Platform shows 0 sessions">
+  This usually means:
+  - The path is correct but no sessions exist yet (you haven't used the agent)
+  - The path format changed in a newer version of the agent
+  - Sessions are stored in a custom location
+
+  **Solution:** Use `--path` to specify the correct location, or check the agent's documentation for its session storage path.
+</Accordion>
+
+<Accordion title="Connection shows 'missing' status">
+  The path was valid when you connected it, but the directory no longer exists.
+
+  **Solution:** Reconnect with the correct path or remove the connection:
+  ```bash
+  lerim connect remove <platform>
+  ```
+</Accordion>
+
+<Accordion title="Path not found error">
+  Lerim couldn't find the specified path.
+
+  **Solution:** Verify the path exists and you have read permissions:
+  ```bash
+  ls -la /path/to/sessions
+  ```
+</Accordion>
+
+## Multi-agent workflows
+
+Lerim's power comes from unifying memory across all your coding agents:
+
+- Use **Claude Code** at the terminal for quick fixes
+- Use **Cursor** in your IDE for feature development  
+- Use **Codex** for code reviews
+- Use **OpenCode** for complex refactoring
+
+**All agents share the same memory store.** Decisions and learnings from one agent are available to all others.
+
+<Tip>
+Connect all the agents you use regularly. Lerim automatically handles sessions from multiple platforms and merges insights into a unified memory.
+</Tip>

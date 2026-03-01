@@ -1,0 +1,282 @@
+---
+title: "lerim memory"
+description: "Memory store operations - search, list, add, and reset"
+---
+
+## Overview
+
+Subcommands for managing the memory store directly. Memories are stored as markdown files in `.lerim/memory/`.
+
+## Subcommands
+
+- `search` - Search memories by keyword
+- `list` - List recent memory items
+- `add` - Create a new memory manually
+- `reset` - Destructive wipe of memory data
+
+---
+
+## search
+
+Full-text keyword search across memory titles, bodies, and tags. Matches are case-insensitive.
+
+### Syntax
+
+```bash
+lerim memory search <query> [--limit N] [--project NAME] [--json]
+```
+
+### Parameters
+
+<ParamField path="query" type="string" required>
+  Search string to match against memory title, body, and tags.
+</ParamField>
+
+<ParamField path="--limit" type="integer" default="20">
+  Maximum results to return.
+</ParamField>
+
+<ParamField path="--project" type="string">
+  Filter results to a specific project. **Note:** Not yet implemented.
+</ParamField>
+
+<ParamField path="--json" type="boolean" default="false">
+  Output structured JSON instead of human-readable text.
+</ParamField>
+
+### Examples
+
+```bash
+# Search for database-related memories
+lerim memory search 'database migration'
+
+# Limit results
+lerim memory search pytest --limit 5
+
+# JSON output
+lerim memory search 'auth' --json
+```
+
+**Output:**
+```
+.lerim/memory/decisions/auth-bearer-tokens.md
+12:We chose bearer token authentication over session cookies
+
+.lerim/memory/learnings/api-security.md
+8:Bearer tokens simplify API authentication for mobile clients
+```
+
+---
+
+## list
+
+Display a list of stored memories (decisions and learnings), ordered by recency.
+
+### Syntax
+
+```bash
+lerim memory list [--limit N] [--project NAME] [--json]
+```
+
+### Parameters
+
+<ParamField path="--limit" type="integer" default="50">
+  Maximum items to display.
+</ParamField>
+
+<ParamField path="--project" type="string">
+  Filter to a specific project. **Note:** Not yet implemented.
+</ParamField>
+
+<ParamField path="--json" type="boolean" default="false">
+  Output structured JSON with file paths.
+</ParamField>
+
+### Examples
+
+```bash
+# List all recent memories
+lerim memory list
+
+# Limit to 10 items
+lerim memory list --limit 10
+
+# JSON output for scripting
+lerim memory list --json
+```
+
+**Output:**
+```
+/home/user/project/.lerim/memory/decisions/use-postgres.md
+/home/user/project/.lerim/memory/learnings/async-patterns.md
+/home/user/project/.lerim/memory/decisions/api-versioning.md
+...
+```
+
+---
+
+## add
+
+Manually create a single memory record from CLI flags. Writes a markdown file to `.lerim/memory/{decisions,learnings}/`.
+
+### Syntax
+
+```bash
+lerim memory add --title <title> --body <body> [OPTIONS]
+```
+
+### Parameters
+
+<ParamField path="--title" type="string" required>
+  Short descriptive title for the memory.
+</ParamField>
+
+<ParamField path="--body" type="string" required>
+  Full body content of the memory.
+</ParamField>
+
+<ParamField path="--primitive" type="string" default="learning">
+  Primitive type: `decision` (a choice made) or `learning` (an insight gained).
+  
+  **Choices:** `decision`, `learning`
+</ParamField>
+
+<ParamField path="--kind" type="string" default="insight">
+  Semantic kind label.
+  
+  **Common values:** `insight`, `procedure`, `friction`, `pitfall`, `preference`
+</ParamField>
+
+<ParamField path="--confidence" type="float" default="0.7">
+  Confidence score from 0.0 to 1.0.
+</ParamField>
+
+<ParamField path="--tags" type="string">
+  Comma-separated tags for categorization (e.g. `python,testing,ci`).
+</ParamField>
+
+### Examples
+
+```bash
+# Add a simple learning
+lerim memory add --title "Use uv for deps" --body "uv is faster than pip"
+
+# Add a decision with metadata
+lerim memory add \
+  --title "API auth pattern" \
+  --body "Use bearer tokens for stateless auth" \
+  --primitive decision \
+  --confidence 0.9 \
+  --tags auth,api,security
+
+# Add a friction point
+lerim memory add \
+  --title "Slow integration tests" \
+  --body "Integration suite takes 5min to run" \
+  --kind friction \
+  --confidence 0.9 \
+  --tags ci,testing,performance
+```
+
+**Output:**
+```
+Added memory: use-uv-for-deps -> /home/user/project/.lerim/memory/learnings/use-uv-for-deps.md
+```
+
+---
+
+## reset
+
+Irreversibly delete `memory/`, `workspace/`, and `index/` under the selected scope, then recreate canonical empty folders.
+
+<Warning>
+  This is a **destructive** operation. All memories, workspaces, and index data will be permanently deleted.
+</Warning>
+
+### Syntax
+
+```bash
+lerim memory reset --yes [--scope SCOPE]
+```
+
+### Parameters
+
+<ParamField path="--yes" type="boolean" required>
+  Required safety flag to confirm destructive reset. Without this, the command refuses to run.
+</ParamField>
+
+<ParamField path="--scope" type="string" default="both">
+  What to reset:
+  - `project` - Reset `<repo>/.lerim/` only
+  - `global` - Reset `~/.lerim/` only (includes sessions DB)
+  - `both` - Reset both project and global roots (default)
+</ParamField>
+
+### Scope behavior
+
+- **project**: Resets `<repo>/.lerim/` only (memories, workspace, index)
+- **global**: Resets `~/.lerim/` only (includes sessions DB in `index/`)
+- **both**: Resets both locations
+
+<Note>
+  The sessions DB lives in global `index/`, so `--scope project` alone does NOT reset the session queue. Use `global` or `both` for a full wipe.
+</Note>
+
+### Examples
+
+```bash
+# Wipe everything (both scopes)
+lerim memory reset --yes
+
+# Reset project data only
+lerim memory reset --scope project --yes
+
+# Fresh start with re-sync
+lerim memory reset --yes && lerim sync --max-sessions 5
+```
+
+**Output:**
+```
+Memory reset completed:
+- /home/user/project/.lerim: removed=45
+- /home/user/.lerim: removed=128
+```
+
+### What gets deleted
+
+- `memory/` - All decisions, learnings, summaries, and archived items
+- `workspace/` - All sync and maintain run artifacts
+- `index/` - Session database and indexing data
+
+### What gets recreated
+
+Canonical folder structure:
+```
+.lerim/
+  memory/
+    decisions/
+    learnings/
+    summaries/
+    archived/
+      decisions/
+      learnings/
+  workspace/
+  index/
+```
+
+## Exit codes
+
+- **0**: Success
+- **1**: Error - operation failed
+- **2**: Usage error - invalid arguments or missing `--yes` flag
+
+## Related commands
+
+<CardGroup cols={2}>
+  <Card title="lerim ask" icon="circle-question" href="/cli/ask">
+    Ask questions using memory
+  </Card>
+  <Card title="lerim sync" icon="arrows-rotate" href="/cli/sync">
+    Extract new memories from sessions
+  </Card>
+</CardGroup>

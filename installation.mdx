@@ -1,0 +1,521 @@
+---
+title: Installation
+description: Detailed installation instructions for Lerim, including prerequisites, Python setup, Docker configuration, and troubleshooting
+---
+
+This guide covers everything you need to install and configure Lerim on your machine.
+
+## Prerequisites
+
+### Python version
+
+Lerim requires **Python 3.10 or higher**. Check your Python version:
+
+```bash
+python --version
+```
+
+You should see:
+
+```
+Python 3.10.x or higher
+```
+
+<Note>
+Lerim supports Python 3.10, 3.11, 3.12, and 3.13+. For Python versions below 3.13, Lerim automatically installs `eval_type_backport>=0.2.0` for compatibility.
+</Note>
+
+### Docker (recommended)
+
+[Docker](https://docs.docker.com/get-docker/) is the recommended way to run Lerim as an always-on service. Install Docker Desktop for your platform:
+
+- **macOS**: [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/)
+- **Windows**: [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
+- **Linux**: [Docker Engine](https://docs.docker.com/engine/install/)
+
+Verify Docker is installed:
+
+```bash
+docker --version
+```
+
+You should see:
+
+```
+Docker version 24.0.0 or higher
+```
+
+<Tip>
+Docker is optional. If you prefer not to use it, you can run Lerim directly with `lerim serve`. See [Running without Docker](#running-without-docker).
+</Tip>
+
+### LLM API key
+
+Lerim uses LLM providers for extraction and querying. You need at least one API key:
+
+- **OpenRouter** (recommended): Get your API key at [openrouter.ai](https://openrouter.ai/)
+- **OpenAI**: Get your API key at [platform.openai.com](https://platform.openai.com/)
+- **ZAI**: Contact ZAI for access
+- **Anthropic** (optional): Get your API key at [console.anthropic.com](https://console.anthropic.com/)
+
+## Installation
+
+### Install via pip
+
+Install Lerim using pip:
+
+```bash
+pip install lerim
+```
+
+This installs the `lerim` command-line tool and all required dependencies:
+
+- `pydantic>=2.0`
+- `python-dotenv>=1.2.1`
+- `PyYAML>=6.0`
+- `loguru>=0.7.3`
+- `dspy>=3.1.3`
+- `python-frontmatter>=1.1.0`
+- `openrouter>=0.6.0`
+- `pydantic-ai>=1.61.0`
+- `logfire[dspy]>=4.25.0`
+
+<Note>
+For Python 3.10, Lerim also installs `tomli>=2.0` for TOML config file support (built-in for Python 3.11+).
+</Note>
+
+### Verify installation
+
+Check that Lerim is installed:
+
+```bash
+lerim --version
+```
+
+You should see:
+
+```
+lerim, version 0.1.52
+```
+
+### Optional dependencies
+
+Lerim supports optional features via extras:
+
+<CodeGroup>
+
+```bash Embeddings support
+pip install lerim[embeddings]
+```
+
+```bash Development tools
+pip install lerim[test,lint]
+```
+
+```bash Documentation tools
+pip install lerim[docs]
+```
+
+</CodeGroup>
+
+The `embeddings` extra includes:
+- `lancedb>=0.27.1`
+- `pyarrow>=15.0.0`
+- `torch>=2.2`
+- `transformers>=4.44.2,<5`
+
+<Tip>
+Embeddings are optional. Lerim defaults to file-based search using `rg` (ripgrep), which is fast and works without any index.
+</Tip>
+
+## Configuration
+
+### Set API keys
+
+Lerim reads API keys from environment variables. Set at least one:
+
+<CodeGroup>
+
+```bash OpenRouter (recommended)
+export OPENROUTER_API_KEY="sk-or-v1-..."
+```
+
+```bash OpenAI
+export OPENAI_API_KEY="sk-..."
+```
+
+```bash ZAI
+export ZAI_API_KEY="..."
+```
+
+```bash Anthropic (optional)
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+</CodeGroup>
+
+Make these persistent by adding them to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+
+```bash
+echo 'export OPENROUTER_API_KEY="sk-or-v1-..."' >> ~/.zshrc
+source ~/.zshrc
+```
+
+<Note>
+Lerim uses OpenRouter by default with the following models:
+- **Lead agent**: `x-ai/grok-4.1-fast`
+- **Explorer agent**: `x-ai/grok-4.1-fast`
+- **Extraction**: `openai/gpt-5-nano` (300K token window)
+- **Summarization**: `openai/gpt-5-nano` (300K token window)
+
+You can customize these in `~/.lerim/config.toml`. See the [configuration guide](/configuration/overview) for details.
+</Note>
+
+### Run the setup wizard
+
+Run the interactive setup wizard:
+
+```bash
+lerim init
+```
+
+This will:
+
+1. Detect your installed coding agents (Claude Code, Codex, Cursor, OpenCode)
+2. Ask which agents you want to connect
+3. Write the config to `~/.lerim/config.toml`
+4. Check for Docker availability
+
+Example session:
+
+```
+Welcome to Lerim.
+
+Which coding agents do you use?
+  claude (detected) [Y/n]: y
+  cursor (detected) [Y/n]: y
+  codex (not found) [y/N]: n
+  opencode (not found) [y/N]: n
+
+Config written to ~/.lerim/config.toml
+Agents: claude, cursor
+
+Docker: found
+
+Next steps:
+  lerim project add /path/to/repo   # register a project
+  lerim up                           # start the Docker service
+```
+
+### Configuration layers
+
+Lerim uses a layered TOML config system (low to high priority):
+
+1. `src/lerim/config/default.toml` (shipped with package — all defaults)
+2. `~/.lerim/config.toml` (user global config)
+3. `<repo>/.lerim/config.toml` (project overrides)
+4. `LERIM_CONFIG` env var path (explicit override, for CI/tests)
+
+API keys always come from environment variables, never from config files.
+
+## Starting Lerim
+
+### With Docker (recommended)
+
+Start Lerim as a Docker service:
+
+```bash
+lerim up
+```
+
+This starts a container that:
+- Runs the sync + maintain daemon loop
+- Serves the dashboard at `http://localhost:8765`
+- Exposes the HTTP API for CLI commands
+
+Output:
+
+```
+Starting Lerim with 0 projects and 2 agents...
+Lerim is running at http://localhost:8765
+```
+
+<Note>
+The first time you run `lerim up`, Docker will pull the Lerim image from the registry. This may take 1-2 minutes depending on your internet connection.
+</Note>
+
+Stop the service:
+
+```bash
+lerim down
+```
+
+View logs:
+
+```bash
+lerim logs --follow
+```
+
+### Running without Docker
+
+If you prefer not to use Docker, run Lerim directly:
+
+```bash
+lerim connect auto           # detect agent platforms
+lerim serve                  # start API server + dashboard + daemon loop
+```
+
+This runs the Lerim server in your terminal. Keep it running in the background.
+
+Alternatively, run the daemon loop without the HTTP server:
+
+```bash
+lerim daemon
+```
+
+This runs sync + maintain in a continuous loop but doesn't serve the dashboard or API. You can use local commands like `lerim memory search` but not service commands like `lerim ask`.
+
+## Verification
+
+Verify that Lerim is running:
+
+```bash
+lerim status
+```
+
+You should see:
+
+```
+Lerim status:
+- connected_agents: 2
+- memory_count: 0
+- sessions_indexed_count: 0
+- queue: {'pending': 0, 'processing': 0, 'failed': 0}
+```
+
+If you get an error like:
+
+```
+Lerim is not running. Start with: lerim up (Docker) or lerim serve (direct)
+```
+
+Make sure you've started the service with `lerim up` or `lerim serve`.
+
+## Adding projects
+
+Register the projects you want Lerim to track:
+
+```bash
+lerim project add ~/codes/my-app
+lerim project add ~/work/backend
+lerim project add .                   # current directory
+```
+
+Each registered project gets a `.lerim/` directory for its memories.
+
+List registered projects:
+
+```bash
+lerim project list
+```
+
+Output:
+
+```
+Registered projects: 2
+  my-app: /Users/you/codes/my-app (ok .lerim/)
+  backend: /Users/you/work/backend (ok .lerim/)
+```
+
+Remove a project:
+
+```bash
+lerim project remove my-app
+```
+
+<Note>
+When you add or remove projects while Lerim is running, the container automatically restarts to mount the new volumes.
+</Note>
+
+## Connecting coding agents
+
+Lerim ingests session transcripts from your coding agents. Connect them using:
+
+```bash
+lerim connect auto
+```
+
+This auto-detects and connects all supported platforms.
+
+Or connect specific platforms:
+
+<CodeGroup>
+
+```bash Claude Code
+lerim connect claude
+```
+
+```bash Cursor
+lerim connect cursor
+```
+
+```bash Codex CLI
+lerim connect codex
+```
+
+```bash OpenCode
+lerim connect opencode
+```
+
+</CodeGroup>
+
+List connected platforms:
+
+```bash
+lerim connect list
+```
+
+Output:
+
+```
+Connected platforms: 2
+- claude: /Users/you/.claude/projects (12 sessions, ok)
+- cursor: /Users/you/Library/Application Support/Cursor/User/globalStorage (8 sessions, ok)
+```
+
+### Platform session stores
+
+| Platform | Default Session Store | Format |
+|----------|----------------------|--------|
+| Claude Code | `~/.claude/projects/` | JSONL files |
+| Codex CLI | `~/.codex/sessions/` | JSONL files |
+| Cursor | `~/Library/Application Support/Cursor/User/globalStorage/` (macOS) | SQLite `state.vscdb`, exported to JSONL |
+| OpenCode | `~/.local/share/opencode/` | SQLite `opencode.db`, exported to JSONL |
+
+<Tip>
+If your agent stores sessions in a non-default location, use `--path` to override:
+
+```bash
+lerim connect claude --path /custom/path/to/claude/sessions
+```
+</Tip>
+
+Disconnect a platform:
+
+```bash
+lerim connect remove claude
+```
+
+## Troubleshooting
+
+### Python version issues
+
+**Problem**: `ERROR: Package 'lerim' requires a different Python: 3.9.0 not in '>=3.10'`
+
+**Solution**: Upgrade to Python 3.10 or higher. Use [pyenv](https://github.com/pyenv/pyenv) to manage multiple Python versions:
+
+```bash
+pyenv install 3.12
+pyenv global 3.12
+pip install lerim
+```
+
+### Docker not found
+
+**Problem**: `Docker: not found` during `lerim init`
+
+**Solution**: Install Docker Desktop or run Lerim without Docker using `lerim serve`.
+
+### API key errors
+
+**Problem**: `Missing API key: OPENROUTER_API_KEY`
+
+**Solution**: Set the environment variable:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+```
+
+Make sure to add it to your shell profile (`~/.bashrc`, `~/.zshrc`) for persistence.
+
+### Port already in use
+
+**Problem**: `Error starting userland proxy: listen tcp4 0.0.0.0:8765: bind: address already in use`
+
+**Solution**: Change the server port in `~/.lerim/config.toml`:
+
+```toml
+[server]
+port = 8766
+```
+
+Or stop the process using port 8765:
+
+```bash
+lsof -ti:8765 | xargs kill
+```
+
+### No sessions detected
+
+**Problem**: `lerim status` shows `sessions_indexed_count: 0`
+
+**Solution**: Make sure you've:
+1. Connected at least one agent platform: `lerim connect auto`
+2. Used your coding agents to create some sessions
+3. Waited for the sync loop to run (or trigger manually with `lerim sync`)
+
+Check connected platforms:
+
+```bash
+lerim connect list
+```
+
+If a platform shows `missing`, the path doesn't exist. Reconnect with the correct path:
+
+```bash
+lerim connect claude --path /correct/path
+```
+
+### Memory not persisting
+
+**Problem**: Memories disappear after restarting Lerim
+
+**Solution**: Make sure you've registered projects with `lerim project add`. Without registered projects, memories only go to `~/.lerim/memory/` (global scope).
+
+Project-scoped memories are stored in `<repo>/.lerim/memory/` and are more durable.
+
+### Build from source (development)
+
+If you want to run Lerim from source:
+
+```bash
+git clone https://github.com/lerim-dev/lerim-cli.git
+cd lerim-cli
+uv venv && source .venv/bin/activate
+uv pip install -e .
+lerim init
+lerim project add .
+docker build -t lerim .
+lerim up
+```
+
+<Note>
+Lerim uses [uv](https://github.com/astral-sh/uv) for fast Python environment management, but you can also use `pip` or `poetry`.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running in 5 minutes
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Customize model providers, tracing, and more
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/cli-reference">
+    Master all Lerim commands
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Understand how Lerim works
+  </Card>
+</CardGroup>
