@@ -1,0 +1,123 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Lerim",
+  "projectDescription": "Continual learning layer for coding agents with persistent memory across sessions",
+  "theme": "aspen",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4f46e5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/how-it-works",
+              "concepts/memory-model",
+              "concepts/sync-maintain",
+              "concepts/supported-agents"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/connecting-agents",
+              "guides/docker-workflow",
+              "guides/native-workflow",
+              "guides/querying-memories",
+              "guides/dashboard"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/config-toml",
+              "configuration/model-roles",
+              "configuration/tracing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/overview",
+              "cli/init",
+              "cli/project",
+              "cli/up-down-logs",
+              "cli/connect",
+              "cli/sync",
+              "cli/maintain",
+              "cli/ask",
+              "cli/memory",
+              "cli/dashboard",
+              "cli/status",
+              "cli/serve",
+              "cli/daemon"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/extraction-pipeline",
+              "architecture/agent-runtime",
+              "architecture/adapters"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/getting-started",
+              "contributing/testing",
+              "contributing/adding-adapters"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Persistent memory across coding agent sessions",
+    "Multi-agent knowledge unification (Claude Code, Cursor, Codex, OpenCode)",
+    "Automatic extraction of decisions and learnings using DSPy pipelines",
+    "Memory refinement with merging, archiving, and time-based decay",
+    "File-first markdown storage with YAML frontmatter",
+    "Docker service architecture with HTTP API and dashboard",
+    "Natural language memory querying",
+    "Project-scoped memory with global fallback"
+  ],
+  "publicApiSurface": [
+    "lerim init",
+    "lerim project add/list/remove",
+    "lerim up/down/logs",
+    "lerim connect [auto|list|remove|<platform>]",
+    "lerim sync",
+    "lerim maintain",
+    "lerim ask <query>",
+    "lerim memory search/list/add/reset",
+    "lerim dashboard",
+    "lerim status",
+    "lerim serve",
+    "lerim daemon"
+  ]
+}
